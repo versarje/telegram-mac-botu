@@ -41,8 +41,9 @@ LIG_ID_BONUS = [39, 140, 135, 78, 61, 88, 203, 144, 94, 2, 3, 848, 5]
 YARIM_SAAT_BILDIRILENLER = set()
 CANLI_TAKIP_HAFIZASI = {} 
 
+# Zaman dilimini Türkiye Saatine (UTC+3) göre başlatıyoruz
 KOTA_TAKIP = {
-    "bugun_tarih": datetime.utcnow().strftime("%Y-%m-%d"),
+    "bugun_tarih": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d"),
     "harcanan_istek": 0,
     "max_limit": 100
 }
@@ -98,7 +99,8 @@ def github_db_yaz(yeni_veri, sha_key):
 # ==========================================
 def api_request(endpoint, params=None):
     global KOTA_TAKIP
-    bugun = datetime.utcnow().strftime("%Y-%m-%d")
+    # Türkiye Saati (UTC+3) ile gün kontrolü yapıyoruz
+    bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
     
     if KOTA_TAKIP["bugun_tarih"] != bugun:
         KOTA_TAKIP["bugun_tarih"] = bugun
@@ -198,14 +200,16 @@ def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
-# 📅 GÜNÜN BÜLTENİ & DB KAYIT
+# 📅 GÜNÜN BÜLTENİ & DB KAYIT (DÜZELTİLDİ)
 # ==========================================
 def gunun_bulteni(chat_id=None):
     """Günün maçlarını çeker, GitHub DB'ye kaydeder ve Telegram'a atar."""
-    su_an = datetime.utcnow()
-    tarih_str = (su_an + timedelta(hours=3)).strftime("%Y-%m-%d")
+    # Türkiye saatini (UTC+3) temel alıyoruz
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "UTC"})
+    # Timezone 'Europe/Istanbul' ayarlandı
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
     if not res_data or not res_data.get("response"):
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API kotası doldu.", chat_id)
         return
@@ -228,8 +232,12 @@ def gunun_bulteni(chat_id=None):
         ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
         dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
         
-        mac_zamani = datetime.fromisoformat(m["fixture"]["date"].replace("Z", "+00:00")).replace(tzinfo=None)
-        saat_tsi = (mac_zamani + timedelta(hours=3)).strftime("%H:%M")
+        # API Europe/Istanbul döndürdüğü için direkt saati biçimlendiriyoruz
+        mac_zamani_raw = m["fixture"]["date"]
+        try:
+            saat_tsi = datetime.fromisoformat(mac_zamani_raw).strftime("%H:%M")
+        except:
+            saat_tsi = mac_zamani_raw[11:16]
 
         durum_str = ""
         # Biten Maçlar
@@ -278,10 +286,10 @@ def gunun_bulteni(chat_id=None):
 # 2. YAKLAŞAN MAÇLAR VE TAHMİN KAYDI
 # ==========================================
 def yaklasan_maclari_kontrol_et():
-    su_an = datetime.utcnow()
-    tarih_str = (su_an + timedelta(hours=3)).strftime("%Y-%m-%d")
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "UTC"})
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
     if not res_data: return
     
     data = res_data.get("response", [])
@@ -296,15 +304,20 @@ def yaklasan_maclari_kontrol_et():
         if status != 'NS' or fid in YARIM_SAAT_BILDIRILENLER:
             continue
 
-        mac_zamani = datetime.fromisoformat(m["fixture"]["date"].replace("Z", "+00:00")).replace(tzinfo=None)
-        fark_dakika = (mac_zamani - su_an).total_seconds() / 60.0
+        mac_zamani_raw = m["fixture"]["date"]
+        try:
+            mac_zamani = datetime.fromisoformat(mac_zamani_raw).replace(tzinfo=None)
+            fark_dakika = (mac_zamani - su_an_tsi).total_seconds() / 60.0
+            saat_tsi = mac_zamani.strftime("%H:%M")
+        except:
+            fark_dakika = 30
+            saat_tsi = mac_zamani_raw[11:16]
 
         if 15 <= fark_dakika <= 45:
             lig = m["league"]["name"]
             lid = m["league"]["id"]
             ev = m["teams"]["home"]["name"]
             dep = m["teams"]["away"]["name"]
-            saat_tsi = (mac_zamani + timedelta(hours=3)).strftime("%H:%M")
 
             ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
 
