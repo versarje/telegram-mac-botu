@@ -57,19 +57,24 @@ def github_db_oku():
         if res.status_code == 200:
             content = res.json()
             file_content = base64.b64decode(content["content"]).decode("utf-8")
-            return json.loads(file_content), content["sha"]
+            data = json.loads(file_content)
+            # Varsayılan anahtarları kontrol et
+            if "tahminler" not in data: data["tahminler"] = {}
+            if "ozel_takip" not in data: data["ozel_takip"] = {}
+            if "bulten" not in data: data["bulten"] = {}
+            return data, content["sha"]
         else:
             print("GitHub DB Okuma Hatası:", res.status_code)
-            return {"tahminler": {}, "ozel_takip": {}}, None
+            return {"tahminler": {}, "ozel_takip": {}, "bulten": {}}, None
     except Exception as e:
         print("GitHub DB Okuma Istek Hatası:", e)
-        return {"tahminler": {}, "ozel_takip": {}}, None
+        return {"tahminler": {}, "ozel_takip": {}, "bulten": {}}, None
 
 def github_db_yaz(yeni_veri, sha_key):
     """Verileri GitHub'daki database.json dosyasına otomatik commit atarak kaydeder."""
     try:
         json_str = json.dumps(yeni_veri, ensure_ascii=False, indent=2)
-        encoded_content = base64.b64decode(json_str.encode("utf-8")).decode("utf-8")
+        encoded_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
         payload = {
             "message": "🤖 Bot Veri Tabanı Güncellendi [Auto Commit]",
@@ -193,6 +198,83 @@ def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
+# 📅 GÜNÜN BÜLTENİ & DB KAYIT
+# ==========================================
+def gunun_bulteni(chat_id=None):
+    """Günün maçlarını çeker, GitHub DB'ye kaydeder ve Telegram'a atar."""
+    su_an = datetime.utcnow()
+    tarih_str = (su_an + timedelta(hours=3)).strftime("%Y-%m-%d")
+
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "UTC"})
+    if not res_data or not res_data.get("response"):
+        telegram_post("📅 Bugün için bültende maç bulunamadı veya API kotası doldu.", chat_id)
+        return
+
+    data = res_data.get("response", [])
+    db_veri, sha_key = github_db_oku()
+    
+    if "bulten" not in db_veri:
+        db_veri["bulten"] = {}
+
+    maclar_listesi = []
+
+    for m in data:
+        fid = str(m["fixture"]["id"])
+        status = m["fixture"]["status"]["short"]
+        lig = m["league"]["name"]
+        ev = m["teams"]["home"]["name"]
+        dep = m["teams"]["away"]["name"]
+        
+        ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
+        dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
+        
+        mac_zamani = datetime.fromisoformat(m["fixture"]["date"].replace("Z", "+00:00")).replace(tzinfo=None)
+        saat_tsi = (mac_zamani + timedelta(hours=3)).strftime("%H:%M")
+
+        durum_str = ""
+        # Biten Maçlar
+        if status in ['FT', 'AET', 'PEN']:
+            durum_str = f"🏁 <b>BİTTİ ({ev_gol}-{dep_gol})</b>"
+        # Canlı Oynanan Maçlar
+        elif status in ['1H', 'HT', '2H', 'ET', 'BT', 'P']:
+            elapsed = m["fixture"]["status"]["elapsed"]
+            durum_str = f"🔥 <b>CANLI ({elapsed}' | {ev_gol}-{dep_gol})</b>"
+        # Oynanmamış Maçlar
+        else:
+            durum_str = f"⏰ Saat: <b>{saat_tsi}</b>"
+
+        # Veritabanına kaydet
+        db_veri["bulten"][fid] = {
+            "mac": f"{ev} vs {dep}",
+            "lig": lig,
+            "saat": saat_tsi,
+            "durum": status,
+            "skor": f"{ev_gol}-{dep_gol}",
+            "tarih": tarih_str
+        }
+
+        maclar_listesi.append(
+            f"{durum_str} | ID: <code>{fid}</code>\n"
+            f"🏆 {lig}\n"
+            f"⚔️ <b>{ev} vs {dep}</b>\n"
+        )
+
+    if sha_key:
+        github_db_yaz(db_veri, sha_key)
+
+    if not maclar_listesi:
+        telegram_post("📅 Bugün gösterilecek maç bulunamadı.", chat_id)
+        return
+
+    mesaj = f"📅 <b>BUGÜNÜN MAÇ BÜLTENİ ({tarih_str})</b>\n-----------------------------------------\n"
+    mesaj += "\n".join(maclar_listesi[:15])
+    
+    if len(maclar_listesi) > 15:
+        mesaj += f"\n\n<i>...ve {len(maclar_listesi) - 15} maç daha bültende mevcut.</i>"
+
+    telegram_post(mesaj, chat_id)
+
+# ==========================================
 # 2. YAKLAŞAN MAÇLAR VE TAHMİN KAYDI
 # ==========================================
 def yaklasan_maclari_kontrol_et():
@@ -311,6 +393,12 @@ def canlı_mac_olaylarini_takip_et():
                 f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>{etiket_metni}"
             )
 
+            # Bülten veritabanındaki skor ve durumu da güncelle
+            if fid in db_veri.get("bulten", {}):
+                db_veri["bulten"][fid]["skor"] = f"{yeni_ev_gol}-{yeni_dep_gol}"
+                db_veri["bulten"][fid]["durum"] = yeni_durum
+                degisiklik_var_mi = True
+
             if fid in db_veri["tahminler"]:
                 toplam_gol = yeni_ev_gol + yeni_dep_gol
                 kg_var = (yeni_ev_gol > 0 and yeni_dep_gol > 0)
@@ -344,7 +432,6 @@ def canlı_mac_olaylarini_takip_et():
 def analiz_getir(cmd_args, chat_id):
     """!analiz <fixture_id> komutu için detaylı maç analizi ve oran görünümü sağlar."""
     if not cmd_args:
-        # ID verilmediyse aktif takip edilen veya son tahmin yapılan maçları gösterir
         db_veri, _ = github_db_oku()
         tahminler = db_veri.get("tahminler", {})
         if not tahminler:
@@ -503,6 +590,9 @@ def telegram_webhook():
 
         elif komut == "!analiz":
             threading.Thread(target=analiz_getir, args=(parcalar[1:], chat_id)).start()
+
+        elif komut in ["!bulten", "!maclar", "!bugun"]:
+            threading.Thread(target=gunun_bulteni, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
 
