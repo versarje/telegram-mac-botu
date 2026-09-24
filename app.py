@@ -19,7 +19,6 @@ BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# GITHUB DATABASE YAPILANDIRMASI
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "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")
 GITHUB_REPO = "versarje/telegram-mac-botu"
 GITHUB_FILE_PATH = "database.json"
@@ -35,13 +34,9 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-LIG_ID_BONUS = [39, 140, 135, 78, 61, 88, 203, 144, 94, 2, 3, 848, 5]
-
-# HAFIZA SİSTEMLERİ
 YARIM_SAAT_BILDIRILENLER = set()
 CANLI_TAKIP_HAFIZASI = {} 
 
-# Zaman dilimini Türkiye Saatine (UTC+3) göre başlatıyoruz
 KOTA_TAKIP = {
     "bugun_tarih": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d"),
     "harcanan_istek": 0,
@@ -52,27 +47,23 @@ KOTA_TAKIP = {
 # 🔄 GITHUB DATABASE OKUMA VE YAZMA SİSTEMİ
 # ==========================================
 def github_db_oku():
-    """GitHub'dan verileri ve SHA anahtarını çeker."""
     try:
         res = requests.get(GITHUB_API_URL, headers=HEADERS_GITHUB, timeout=10)
         if res.status_code == 200:
             content = res.json()
             file_content = base64.b64decode(content["content"]).decode("utf-8")
             data = json.loads(file_content)
-            # Varsayılan anahtarları kontrol et
             if "tahminler" not in data: data["tahminler"] = {}
             if "ozel_takip" not in data: data["ozel_takip"] = {}
             if "bulten" not in data: data["bulten"] = {}
             return data, content["sha"]
         else:
-            print("GitHub DB Okuma Hatası:", res.status_code)
             return {"tahminler": {}, "ozel_takip": {}, "bulten": {}}, None
     except Exception as e:
         print("GitHub DB Okuma Istek Hatası:", e)
         return {"tahminler": {}, "ozel_takip": {}, "bulten": {}}, None
 
 def github_db_yaz(yeni_veri, sha_key):
-    """Verileri GitHub'daki database.json dosyasına otomatik commit atarak kaydeder."""
     try:
         json_str = json.dumps(yeni_veri, ensure_ascii=False, indent=2)
         encoded_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
@@ -84,12 +75,7 @@ def github_db_yaz(yeni_veri, sha_key):
         }
 
         res = requests.put(GITHUB_API_URL, json=payload, headers=HEADERS_GITHUB, timeout=10)
-        if res.status_code in [200, 201]:
-            print("✅ Veriler GitHub Database'e başarıyla yazıldı.")
-            return True
-        else:
-            print("❌ GitHub DB Yazma Hatası:", res.status_code, res.json())
-            return False
+        return res.status_code in [200, 201]
     except Exception as e:
         print("GitHub DB Yazma Istek Hatası:", e)
         return False
@@ -99,7 +85,6 @@ def github_db_yaz(yeni_veri, sha_key):
 # ==========================================
 def api_request(endpoint, params=None):
     global KOTA_TAKIP
-    # Türkiye Saati (UTC+3) ile gün kontrolü yapıyoruz
     bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
     
     if KOTA_TAKIP["bugun_tarih"] != bugun:
@@ -134,7 +119,6 @@ def telegram_post(metin, chat_id=None):
         print("Telegram gonderme hatasi:", e)
 
 def mac_oranlarini_getir(fixture_id):
-    """API-Football üzerinden maçın güncel oranlarını çeker."""
     data = api_request("odds", {"fixture": fixture_id})
     ust25_oran, alt25_oran, kg_var_oran = None, None, None
 
@@ -159,9 +143,6 @@ def mac_oranlarini_getir(fixture_id):
 
     return ust25_oran, alt25_oran, kg_var_oran
 
-# ==========================================
-# 📐 TAHMİN VE ORAN ALGORİTMASI
-# ==========================================
 def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     eff_ust = ust25 if ust25 else 1.65
     eff_alt = alt25 if alt25 else (2.10 if eff_ust < 2.0 else 1.65)
@@ -200,16 +181,14 @@ def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
-# 📅 GÜNÜN BÜLTENİ & DB KAYIT (DÜZELTİLDİ)
+# 📅 GÜNÜN BÜLTENİ & DB KAYIT (YENİLENDİ)
 # ==========================================
 def gunun_bulteni(chat_id=None):
-    """Günün maçlarını çeker, GitHub DB'ye kaydeder ve Telegram'a atar."""
-    # Türkiye saatini (UTC+3) temel alıyoruz
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    # Timezone 'Europe/Istanbul' ayarlandı
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    # API'den yalın UTC verisi çekip kod içinde TSİ (+3 saat) dönüşümü yapıyoruz
+    res_data = api_request("fixtures", {"date": tarih_str})
     if not res_data or not res_data.get("response"):
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API kotası doldu.", chat_id)
         return
@@ -232,26 +211,24 @@ def gunun_bulteni(chat_id=None):
         ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
         dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
         
-        # API Europe/Istanbul döndürdüğü için direkt saati biçimlendiriyoruz
-        mac_zamani_raw = m["fixture"]["date"]
+        # UTC tarihini TSİ (+3) saatine dönüştürme
+        mac_zamani_str = m["fixture"]["date"]
         try:
-            saat_tsi = datetime.fromisoformat(mac_zamani_raw).strftime("%H:%M")
+            dt_utc = datetime.fromisoformat(mac_zamani_str.replace("Z", "+00:00"))
+            dt_tsi = dt_utc + timedelta(hours=3)
+            saat_tsi = dt_tsi.strftime("%H:%M")
         except:
-            saat_tsi = mac_zamani_raw[11:16]
+            saat_tsi = mac_zamani_str[11:16]
 
         durum_str = ""
-        # Biten Maçlar
         if status in ['FT', 'AET', 'PEN']:
             durum_str = f"🏁 <b>BİTTİ ({ev_gol}-{dep_gol})</b>"
-        # Canlı Oynanan Maçlar
         elif status in ['1H', 'HT', '2H', 'ET', 'BT', 'P']:
             elapsed = m["fixture"]["status"]["elapsed"]
             durum_str = f"🔥 <b>CANLI ({elapsed}' | {ev_gol}-{dep_gol})</b>"
-        # Oynanmamış Maçlar
         else:
             durum_str = f"⏰ Saat: <b>{saat_tsi}</b>"
 
-        # Veritabanına kaydet
         db_veri["bulten"][fid] = {
             "mac": f"{ev} vs {dep}",
             "lig": lig,
@@ -286,10 +263,11 @@ def gunun_bulteni(chat_id=None):
 # 2. YAKLAŞAN MAÇLAR VE TAHMİN KAYDI
 # ==========================================
 def yaklasan_maclari_kontrol_et():
-    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    su_an_utc = datetime.utcnow()
+    su_an_tsi = su_an_utc + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    res_data = api_request("fixtures", {"date": tarih_str})
     if not res_data: return
     
     data = res_data.get("response", [])
@@ -304,14 +282,14 @@ def yaklasan_maclari_kontrol_et():
         if status != 'NS' or fid in YARIM_SAAT_BILDIRILENLER:
             continue
 
-        mac_zamani_raw = m["fixture"]["date"]
+        mac_zamani_str = m["fixture"]["date"]
         try:
-            mac_zamani = datetime.fromisoformat(mac_zamani_raw).replace(tzinfo=None)
-            fark_dakika = (mac_zamani - su_an_tsi).total_seconds() / 60.0
-            saat_tsi = mac_zamani.strftime("%H:%M")
+            dt_utc = datetime.fromisoformat(mac_zamani_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            fark_dakika = (dt_utc - su_an_utc).total_seconds() / 60.0
+            saat_tsi = (dt_utc + timedelta(hours=3)).strftime("%H:%M")
         except:
             fark_dakika = 30
-            saat_tsi = mac_zamani_raw[11:16]
+            saat_tsi = mac_zamani_str[11:16]
 
         if 15 <= fark_dakika <= 45:
             lig = m["league"]["name"]
@@ -388,7 +366,6 @@ def canlı_mac_olaylarini_takip_et():
 
         eski_veri = CANLI_TAKIP_HAFIZASI[fid]
 
-        # GOL
         if yeni_ev_gol > eski_veri["home_goals"] or yeni_dep_gol > eski_veri["away_goals"]:
             atılan_taraf = ev if yeni_ev_gol > eski_veri["home_goals"] else dep
             telegram_post(
@@ -398,7 +375,6 @@ def canlı_mac_olaylarini_takip_et():
                 f"🔥 Gol: <b>{atılan_taraf}</b>{etiket_metni}"
             )
 
-        # MAÇ BİTTİ
         if yeni_durum in ['FT', 'AET', 'PEN'] and eski_veri["status"] not in ['FT', 'AET', 'PEN']:
             telegram_post(
                 f"🏁 <b>MAÇ SONA ERDİ</b> (ID: <code>{fid}</code>)\n"
@@ -406,7 +382,6 @@ def canlı_mac_olaylarini_takip_et():
                 f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>{etiket_metni}"
             )
 
-            # Bülten veritabanındaki skor ve durumu da güncelle
             if fid in db_veri.get("bulten", {}):
                 db_veri["bulten"][fid]["skor"] = f"{yeni_ev_gol}-{yeni_dep_gol}"
                 db_veri["bulten"][fid]["durum"] = yeni_durum
@@ -443,7 +418,6 @@ def canlı_mac_olaylarini_takip_et():
 # 4. SKORBOARD, KOTA, ANALİZ VE KOMUTLAR
 # ==========================================
 def analiz_getir(cmd_args, chat_id):
-    """!analiz <fixture_id> komutu için detaylı maç analizi ve oran görünümü sağlar."""
     if not cmd_args:
         db_veri, _ = github_db_oku()
         tahminler = db_veri.get("tahminler", {})
