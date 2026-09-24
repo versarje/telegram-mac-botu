@@ -20,8 +20,8 @@ TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
 # GITHUB DATABASE YAPILANDIRMASI
-GITHUB_TOKEN = "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"   # 2. Adımda aldığın token
-GITHUB_REPO = "versarje/telegram-mac-botu"             # Örn: umut/futbol-botu
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+GITHUB_REPO = "versarje/telegram-mac-botu"
 GITHUB_FILE_PATH = "database.json"
 
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
@@ -310,14 +310,15 @@ def canlı_mac_olaylarini_takip_et():
         github_db_yaz(db_veri, sha_key)
 
 # ==========================================
-# 4. SKORBOARD VE KOMUTLAR
+# 4. SKORBOARD, KOTA VE KOMUTLAR
 # ==========================================
-def skorboard_getir(chat_id):
+def skorboard_getir(chat_id=None):
+    target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
     db_veri, _ = github_db_oku()
     tahminler = db_veri.get("tahminler", {})
 
     if not tahminler:
-        telegram_post("📊 Henüz tahmin yapılmış bir maç bulunmuyor.", chat_id)
+        telegram_post("📊 Henüz tahmin yapılmış bir maç bulunmuyor.", target_chat)
         return
 
     toplam = len(tahminler)
@@ -342,7 +343,23 @@ def skorboard_getir(chat_id):
     satirlar.append(f"✅ Tutan: <b>{tutan}</b> | ❌ Yatan: <b>{yatan}</b> | ⏳ Bekleyen: <b>{bekleyen}</b>")
     satirlar.append(f"📈 <b>Başarı Oranı: %{basari_orani}</b>")
 
-    telegram_post("\n".join(satirlar), chat_id)
+    telegram_post("\n".join(satirlar), target_chat)
+
+def manuel_kota_bilgisi_getir(chat_id):
+    harcanan = KOTA_TAKIP["harcanan_istek"]
+    limit = KOTA_TAKIP["max_limit"]
+    kalan = max(0, limit - harcanan)
+    yuzde = int((harcanan / limit) * 100)
+
+    mesaj = (
+        f"📊 <b>API KOTA DURUMU</b>\n"
+        f"-----------------------------------------\n"
+        f"📅 Tarih: <b>{KOTA_TAKIP['bugun_tarih']}</b>\n"
+        f"📉 Harcanan İstek: <b>{harcanan} / {limit}</b>\n"
+        f"🔋 Kalan Hakkınız: <b>{kalan} İstek</b>\n"
+        f"⚡ Kullanım Oranı: <b>%{yuzde}</b>"
+    )
+    telegram_post(mesaj, chat_id)
 
 def takip_ekle_cikar(user_mention, cmd_args, chat_id):
     if not cmd_args:
@@ -373,8 +390,13 @@ def takip_ekle_cikar(user_mention, cmd_args, chat_id):
 # 5. SCHEDULER & FLASK WEBHOOK
 # ==========================================
 scheduler = BackgroundScheduler()
+# Yaklaşan maç kontrolü (Her 30 dakikada bir)
 scheduler.add_job(func=yaklasan_maclari_kontrol_et, trigger="interval", minutes=30)
+# Canlı maç kontrolü (Her 10 dakikada bir)
 scheduler.add_job(func=canlı_mac_olaylarini_takip_et, trigger="interval", minutes=10)
+# Gece Otomatik Skorboard Raporı (Her gece 23:59'da Telegram Grubuna atar)
+scheduler.add_job(func=lambda: skorboard_getir(TELEGRAM_CHAT_ID), trigger="cron", hour=23, minute=59)
+
 scheduler.start()
 
 @app.route('/telegram-webhook', methods=['POST'])
@@ -397,6 +419,9 @@ def telegram_webhook():
 
         elif komut == "!takip":
             threading.Thread(target=takip_ekle_cikar, args=(user_mention, parcalar[1:], chat_id)).start()
+
+        elif komut == "!kota":
+            threading.Thread(target=manuel_kota_bilgisi_getir, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
 
