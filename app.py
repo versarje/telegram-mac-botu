@@ -69,7 +69,7 @@ def github_db_yaz(yeni_veri, sha_key):
     """Verileri GitHub'daki database.json dosyasına otomatik commit atarak kaydeder."""
     try:
         json_str = json.dumps(yeni_veri, ensure_ascii=False, indent=2)
-        encoded_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+        encoded_content = base64.b64decode(json_str.encode("utf-8")).decode("utf-8")
 
         payload = {
             "message": "🤖 Bot Veri Tabanı Güncellendi [Auto Commit]",
@@ -126,47 +126,71 @@ def telegram_post(metin, chat_id=None):
     except Exception as e:
         print("Telegram gonderme hatasi:", e)
 
-def poisson_gol_olasiligi(lmbda, k):
-    return (math.pow(lmbda, k) * math.exp(-lmbda)) / math.factorial(k)
+def mac_oranlarini_getir(fixture_id):
+    """API-Football üzerinden maçın güncel oranlarını çeker."""
+    data = api_request("odds", {"fixture": fixture_id})
+    ust25_oran, alt25_oran, kg_var_oran = None, None, None
 
-def tahmin_ve_oran_hesapla(lid, ust25=1.80, kg_var=1.80):
-    eff_ust = ust25 if ust25 else 1.80
-    eff_kg = kg_var if kg_var else 1.80
+    if data and data.get("response"):
+        try:
+            bookmakers = data["response"][0].get("bookmakers", [])
+            if bookmakers:
+                bets = bookmakers[0].get("bets", [])
+                for bet in bets:
+                    if bet["id"] == 5 or bet["name"] == "Goals Over/Under":
+                        for val in bet["values"]:
+                            if val["value"] == "Over 2.5":
+                                ust25_oran = float(val["odd"])
+                            elif val["value"] == "Under 2.5":
+                                alt25_oran = float(val["odd"])
+                    elif bet["id"] == 8 or bet["name"] == "Both Teams To Score":
+                        for val in bet["values"]:
+                            if val["value"] == "Yes":
+                                kg_var_oran = float(val["odd"])
+        except Exception as e:
+            print(f"Oran okuma hatasi (ID: {fixture_id}):", e)
 
-    prob_ust_implied = (1 / eff_ust) * 100
-    prob_kg_implied = (1 / eff_kg) * 100
-    beklenen_toplam_gol = 2.5 * (1.85 / eff_ust)
+    return ust25_oran, alt25_oran, kg_var_oran
 
-    p_ev_0 = poisson_gol_olasiligi(beklenen_toplam_gol / 2, 0)
-    p_dep_0 = poisson_gol_olasiligi(beklenen_toplam_gol / 2, 0)
-    p_kg_yok = p_ev_0 + p_dep_0 - (p_ev_0 * p_dep_0)
-    p_kg_var_poisson = (1 - p_kg_yok) * 100
-    p_ust_poisson = min((beklenen_toplam_gol / 2.5) * 55, 90)
+# ==========================================
+# 📐 TAHMİN VE ORAN ALGORİTMASI
+# ==========================================
+def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
+    eff_ust = ust25 if ust25 else 1.65
+    eff_alt = alt25 if alt25 else (2.10 if eff_ust < 2.0 else 1.65)
+    eff_kg = kg_var if kg_var else 1.65
 
-    ai_ust_score = (p_ust_poisson * 0.6) + (prob_ust_implied * 0.4)
-    ai_kg_score = (p_kg_var_poisson * 0.6) + (prob_kg_implied * 0.4)
+    if (eff_ust >= 3.00 and 1.40 <= eff_alt <= 1.75) or (1.40 <= eff_alt <= 1.75 and eff_ust > 2.00):
+        return "🛡️ 2.5 ALT", "ALT25", round((1 / eff_alt) * 100, 1), round((1 / eff_kg) * 100, 1)
 
-    if lid in LIG_ID_BONUS:
-        ai_ust_score += 5.0
-        ai_kg_score += 4.0
+    ust_uygun = (1.40 <= eff_ust <= 1.75)
+    kg_uygun = (1.40 <= eff_kg <= 1.75)
 
-    ai_ust_score = round(min(ai_ust_score, 95.0), 1)
-    ai_kg_score = round(min(ai_kg_score, 95.0), 1)
-
-    tahmin_metni = "⚽ 2.5 ÜST"
-    tahmin_turu = "UST25"
-
-    if ai_ust_score >= 52.0 and ai_kg_score >= 50.0: 
-        tahmin_metni = "🔥 2.5 ÜST & KG VAR"
-        tahmin_turu = "UST_KG"
-    elif ai_ust_score >= 48.0: 
+    if ust_uygun and kg_uygun:
+        if eff_ust <= eff_kg:
+            tahmin_metni = "⚽ 2.5 ÜST"
+            tahmin_turu = "UST25"
+        else:
+            tahmin_metni = "🤝 KG VAR"
+            tahmin_turu = "KG_VAR"
+    elif ust_uygun:
         tahmin_metni = "⚽ 2.5 ÜST"
         tahmin_turu = "UST25"
-    elif ai_kg_score >= 46.0: 
+    elif kg_uygun:
         tahmin_metni = "🤝 KG VAR"
         tahmin_turu = "KG_VAR"
+    else:
+        if eff_ust < eff_kg:
+            tahmin_metni = "⚽ 2.5 ÜST"
+            tahmin_turu = "UST25"
+        else:
+            tahmin_metni = "🤝 KG VAR"
+            tahmin_turu = "KG_VAR"
 
-    return tahmin_metni, tahmin_turu, ai_ust_score, ai_kg_score
+    prob_ust = round((1 / eff_ust) * 100, 1)
+    prob_kg = round((1 / eff_kg) * 100, 1)
+
+    return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
 # 2. YAKLAŞAN MAÇLAR VE TAHMİN KAYDI
@@ -200,9 +224,12 @@ def yaklasan_maclari_kontrol_et():
             dep = m["teams"]["away"]["name"]
             saat_tsi = (mac_zamani + timedelta(hours=3)).strftime("%H:%M")
 
-            tahmin_metni, tahmin_turu, ai_ust, ai_kg = tahmin_ve_oran_hesapla(lid)
+            ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
 
-            # GitHub Veri Tabanına Kaydet
+            tahmin_metni, tahmin_turu, ai_ust, ai_kg = tahmin_ve_oran_hesapla(
+                lid, ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
+            )
+
             db_veri["tahminler"][fid] = {
                 "mac": f"{ev} vs {dep}",
                 "tahmin": tahmin_metni,
@@ -212,6 +239,8 @@ def yaklasan_maclari_kontrol_et():
             }
             degisiklik_var_mi = True
 
+            oran_bilgisi = f"📊 Oranlar -> 2.5 Üst: {ust25_o if ust25_o else '-'} | 2.5 Alt: {alt25_o if alt25_o else '-'} | KG Var: {kg_var_o if kg_var_o else '-'}"
+
             mesaj = (
                 f"⏳ <b>MAÇ BAŞLIYOR!</b> (ID: <code>{fid}</code>)\n"
                 f"🏆 <code>{lig}</code>\n"
@@ -219,7 +248,7 @@ def yaklasan_maclari_kontrol_et():
                 f"⏰ Saat: <b>{saat_tsi}</b>\n"
                 f"-----------------------------------------\n"
                 f"🎯 <b>AI TAHMİNİ:</b> <u>{tahmin_metni}</u>\n"
-                f"📈 2.5 Üst: %{ai_ust} | ⚽ KG Var: %{ai_kg}\n\n"
+                f"{oran_bilgisi}\n\n"
                 f"📌 <i>Takip etmek için:</i> <code>!takip {fid}</code>"
             )
             telegram_post(mesaj)
@@ -274,7 +303,7 @@ def canlı_mac_olaylarini_takip_et():
                 f"🔥 Gol: <b>{atılan_taraf}</b>{etiket_metni}"
             )
 
-        # MAÇ BİTTİ -> TAHMİNİ SONUÇLANDIR VE DB'YE YAZ
+        # MAÇ BİTTİ
         if yeni_durum in ['FT', 'AET', 'PEN'] and eski_veri["status"] not in ['FT', 'AET', 'PEN']:
             telegram_post(
                 f"🏁 <b>MAÇ SONA ERDİ</b> (ID: <code>{fid}</code>)\n"
@@ -289,8 +318,8 @@ def canlı_mac_olaylarini_takip_et():
                 tuttu = False
 
                 if tur == "UST25" and toplam_gol > 2: tuttu = True
+                elif tur == "ALT25" and toplam_gol < 3: tuttu = True
                 elif tur == "KG_VAR" and kg_var: tuttu = True
-                elif tur == "UST_KG" and (toplam_gol > 2 and kg_var): tuttu = True
 
                 db_veri["tahminler"][fid]["skor"] = f"{yeni_ev_gol}-{yeni_dep_gol}"
                 db_veri["tahminler"][fid]["durum"] = "✅ TUTTU" if tuttu else "❌ GELMEDİ"
@@ -310,8 +339,61 @@ def canlı_mac_olaylarini_takip_et():
         github_db_yaz(db_veri, sha_key)
 
 # ==========================================
-# 4. SKORBOARD, KOTA VE KOMUTLAR
+# 4. SKORBOARD, KOTA, ANALİZ VE KOMUTLAR
 # ==========================================
+def analiz_getir(cmd_args, chat_id):
+    """!analiz <fixture_id> komutu için detaylı maç analizi ve oran görünümü sağlar."""
+    if not cmd_args:
+        # ID verilmediyse aktif takip edilen veya son tahmin yapılan maçları gösterir
+        db_veri, _ = github_db_oku()
+        tahminler = db_veri.get("tahminler", {})
+        if not tahminler:
+            telegram_post("⚠️ Lütfen bir Maç ID'si girin. Örnek: <code>!analiz 1038492</code>", chat_id)
+            return
+
+        metin = "📊 <b>ANALİZ EDİLEBİLİR SON MAÇLAR:</b>\n"
+        for fid, item in list(tahminler.items())[-5:]:
+            metin += f"▫️ ID: <code>{fid}</code> - {item['mac']}\n"
+        metin += "\n📌 Kullanım: <code>!analiz <MAÇ_ID></code>"
+        telegram_post(metin, chat_id)
+        return
+
+    fid = str(cmd_args[0])
+    res = api_request("fixtures", {"id": fid})
+
+    if not res or not res.get("response"):
+        telegram_post(f"❌ <b>{fid}</b> ID'li maç verisi bulunamadı.", chat_id)
+        return
+
+    m = res["response"][0]
+    lig = m["league"]["name"]
+    ev = m["teams"]["home"]["name"]
+    dep = m["teams"]["away"]["name"]
+    durum = m["fixture"]["status"]["long"]
+    ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
+    dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
+
+    ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
+    tahmin_metni, _, ai_ust, ai_kg = tahmin_ve_oran_hesapla(
+        m["league"]["id"], ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
+    )
+
+    mesaj = (
+        f"🔍 <b>MAÇ DETAYLI ANALİZİ</b> (ID: <code>{fid}</code>)\n"
+        f"🏆 <code>{lig}</code>\n"
+        f"⚔️ <b>{ev} {ev_gol} - {dep_gol} {dep}</b>\n"
+        f"📌 Durum: <b>{durum}</b>\n"
+        f"-----------------------------------------\n"
+        f"📈 <b>GÜNCEL BÜRO ORANLARI:</b>\n"
+        f"🔹 2.5 Üst: <b>{ust25_o if ust25_o else 'Yok'}</b>\n"
+        f"🔹 2.5 Alt: <b>{alt25_o if alt25_o else 'Yok'}</b>\n"
+        f"🔹 KG Var: <b>{kg_var_o if kg_var_o else 'Yok'}</b>\n"
+        f"-----------------------------------------\n"
+        f"🎯 <b>SİSTEM TAHMİNİ:</b> <u>{tahmin_metni}</u>\n"
+        f"📊 Örtülü İhtimal -> Üst: %{ai_ust} | KG Var: %{ai_kg}"
+    )
+    telegram_post(mesaj, chat_id)
+
 def skorboard_getir(chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
     db_veri, _ = github_db_oku()
@@ -383,18 +465,14 @@ def takip_ekle_cikar(user_mention, cmd_args, chat_id):
         db_veri["ozel_takip"][fid].append(user_mention)
         telegram_post(f"✅ {user_mention}, <b>{fid}</b> ID'li maç takibe alındı!", chat_id)
 
-    # Güncellenen Takipçi Listesini GitHub'a Yaz
     github_db_yaz(db_veri, sha_key)
 
 # ==========================================
 # 5. SCHEDULER & FLASK WEBHOOK
 # ==========================================
 scheduler = BackgroundScheduler()
-# Yaklaşan maç kontrolü (Her 30 dakikada bir)
 scheduler.add_job(func=yaklasan_maclari_kontrol_et, trigger="interval", minutes=30)
-# Canlı maç kontrolü (Her 10 dakikada bir)
 scheduler.add_job(func=canlı_mac_olaylarini_takip_et, trigger="interval", minutes=10)
-# Gece Otomatik Skorboard Raporı (Her gece 23:59'da Telegram Grubuna atar)
 scheduler.add_job(func=lambda: skorboard_getir(TELEGRAM_CHAT_ID), trigger="cron", hour=23, minute=59)
 
 scheduler.start()
@@ -422,6 +500,9 @@ def telegram_webhook():
 
         elif komut == "!kota":
             threading.Thread(target=manuel_kota_bilgisi_getir, args=(chat_id,)).start()
+
+        elif komut == "!analiz":
+            threading.Thread(target=analiz_getir, args=(parcalar[1:], chat_id)).start()
 
     return jsonify({"status": "ok"}), 200
 
