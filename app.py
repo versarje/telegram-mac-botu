@@ -24,8 +24,9 @@ HEADERS = {
 
 LIG_ID_BONUS = [39, 140, 135, 78, 61, 88, 203, 144, 94, 2, 3, 848, 5]
 
-# Bildirilen maçların id'lerini hafızada tutarak tekrar atılmasını engelliyoruz
-BILDIRILEN_MACLAR = set()
+# Mükerrer bildirim engelleme hafızaları
+YARIM_SAAT_BILDIRILENLER = set()
+CANLI_TAKIP_HAFIZASI = {} # { fixture_id: {"home_goals": 0, "away_goals": 0, "status": "1H"} }
 
 # ==========================================
 # 1. YARDIMCI FONKSİYONLAR
@@ -47,7 +48,7 @@ def telegram_post(metin, chat_id=None):
 def poisson_gol_olasiligi(lmbda, k):
     return (math.pow(lmbda, k) * math.exp(-lmbda)) / math.factorial(k)
 
-def tahmin_ve_oran_hesapla(lid, ust25, kg_var):
+def tahmin_ve_oran_hesapla(lid, ust25=1.80, kg_var=1.80):
     eff_ust = ust25 if ust25 else 1.80
     eff_kg = kg_var if kg_var else 1.80
 
@@ -79,147 +80,157 @@ def tahmin_ve_oran_hesapla(lid, ust25, kg_var):
     return tahmin, ai_ust_score, ai_kg_score
 
 # ==========================================
-# 2. CANLI BİTEN MAÇLARI DOĞRUDAN API'DEN TESPİT ETME
+# 2. SİSTEM 1: YAKLAŞAN MAÇLARI TARAMA (30 DK KALAN)
 # ==========================================
-def api_canli_biten_maclari_kontrol_et(chat_id=None):
-    """Veritabanına ihtiyaç duymadan doğrudan API'den biten maçları kontrol eder."""
-    su_an = datetime.utcnow() + timedelta(hours=3)
-    tarih_str = su_an.strftime("%Y-%m-%d")
+def yaklasan_maclari_kontrol_et():
+    """Başlamasına ~30 dakika kalan maçları tespit eder ve tahminini gruba atar."""
+    su_an = datetime.utcnow()
+    tarih_str = (su_an + timedelta(hours=3)).strftime("%Y-%m-%d")
 
     url = f"{BASE_URL}/fixtures"
-    params = {"date": tarih_str, "timezone": "Europe/Istanbul"}
-    
-    try:
-        res = requests.get(url, params=params, headers=HEADERS, timeout=30)
-        data = res.json().get("response", [])
-        if not data:
-            if chat_id: telegram_post("ℹ️ Bugün için maç verisi bulunamadı.", chat_id)
-            return
-
-        biten_maclar = [m for m in data if m["fixture"]["status"]["short"] in ['FT', 'AET', 'PEN']]
-        if not biten_maclar:
-            if chat_id: telegram_post("ℹ️ Şu an henüz sonuçlanmış yeni bir maç bulunmuyor.", chat_id)
-            return
-
-        yeni_bildirim_var = False
-
-        for m in biten_maclar:
-            fid = m["fixture"]["id"]
-            if fid in BILDIRILEN_MACLAR:
-                continue # Daha önce gruba bildirildiyse atla
-
-            lig = m["league"]["name"]
-            lid = m["league"]["id"]
-            ev = m["teams"]["home"]["name"]
-            dep = m["teams"]["away"]["name"]
-            ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
-            dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
-
-            # Tahmin hesaplaması için varsayılan oranlar/analiz üret
-            tahmin, _, _ = tahmin_ve_oran_hesapla(lid, None, None)
-
-            toplam_gol = ev_gol + dep_gol
-            kg_durum = (ev_gol > 0 and dep_gol > 0)
-            basarili = False
-
-            if "2.5 ÜST & KG VAR" in tahmin:
-                if toplam_gol >= 3 and kg_durum: basarili = True
-            elif "2.5 ÜST" in tahmin:
-                if toplam_gol >= 3: basarili = True
-            elif "KG VAR" in tahmin:
-                if kg_durum: basarili = True
-
-            durum_emoji = "✅ KAZANDI" if basarili else "❌ KAYBETTİ"
-
-            mesaj = (
-                f"🏁 <b>MAÇ SONUÇLANDI!</b>\n"
-                f"🏆 <code>{lig}</code>\n"
-                f"⚔️ <b>{ev} {ev_gol} - {dep_gol} {dep}</b>\n"
-                f"🎯 <b>AI Tahmini:</b> {tahmin}\n"
-                f"📌 <b>Sonuç:</b> {durum_emoji}"
-            )
-            
-            telegram_post(mesaj, chat_id)
-            BILDIRILEN_MACLAR.add(fid)
-            yeni_bildirim_var = True
-            time.sleep(1) # Telegram spam engeline takılmamak için kısa bekleme
-
-        if not yeni_bildirim_var and chat_id:
-            telegram_post("ℹ️ Sonuçlanan tüm maçlar zaten gruba bildirildi.", chat_id)
-
-    except Exception as e:
-        print("Biten mac kontrol hatasi:", e)
-
-# ==========================================
-# 3. BÜLTEN VE ANALİZ ÇIKARMA
-# ==========================================
-def bot_bulten_gorevi(chat_id):
-    su_an = datetime.utcnow() + timedelta(hours=3)
-    tarih_str = su_an.strftime("%Y-%m-%d")
-    saat_str = su_an.strftime("%H:%M")
-
-    telegram_post("⏳ <b>Güncel canlı ve yaklaşan maçlar taranıyor...</b> Lütfen bekleyin.", chat_id)
-    
-    url = f"{BASE_URL}/fixtures"
-    params = {"date": tarih_str, "timezone": "Europe/Istanbul"}
+    params = {"date": tarih_str, "timezone": "UTC"}
     
     try:
         res = requests.get(url, params=params, headers=HEADERS, timeout=30)
         data = res.json().get("response", [])
         
-        # Oynanmamış veya canlı olan maçları filtrele
-        uygun_maclar = [
-            m for m in data 
-            if m["fixture"]["status"]["short"] in ['NS', '1H', 'HT', '2H', 'LIVE'] 
-            and m["fixture"]["date"][11:16] >= saat_str
-        ]
+        for m in data:
+            fid = m["fixture"]["id"]
+            status = m["fixture"]["status"]["short"]
+            
+            if status != 'NS' or fid in YARIM_SAAT_BILDIRILENLER:
+                continue
 
-        if not uygun_maclar:
-            telegram_post("⚠️ Saat bazlı analiz edilecek aktif maç bulunamadı.", chat_id)
-            return
+            mac_zamani = datetime.fromisoformat(m["fixture"]["date"].replace("Z", "+00:00")).replace(tzinfo=None)
+            fark_dakika = (mac_zamani - su_an).total_seconds() / 60.0
 
-        baslik = f"🤖 <b>AI FOOTBALL BÜLTENİ</b> ({tarih_str})\n⏰ <i>Saat {saat_str} (TSİ) Sonrası ({len(uygun_maclar[:15])} Maç)</i>\n=============================\n\n"
-        parca_mesaj = baslik
+            # Başlamasına 15 ile 45 dakika kalmışsa bildir
+            if 15 <= fark_dakika <= 45:
+                lig = m["league"]["name"]
+                lid = m["league"]["id"]
+                ev = m["teams"]["home"]["name"]
+                dep = m["teams"]["away"]["name"]
+                saat_tsi = (mac_zamani + timedelta(hours=3)).strftime("%H:%M")
 
-        for m in uygun_maclar[:15]: # Grubu boğmamak için ilk 15 maçı sunar
-            durum = m["fixture"]["status"]["short"]
-            saat = m["fixture"]["date"][11:16]
-            lig = m["league"]["name"]
-            lid = m["league"]["id"]
-            ev = m["teams"]["home"]["name"]
-            dep = m["teams"]["away"]["name"]
+                tahmin, ai_ust, ai_kg = tahmin_ve_oran_hesapla(lid)
 
-            durum_etiketi = "🔴 CANLI" if durum in ['1H', '2H', 'HT', 'LIVE'] else f"⏰ {saat}"
-            tahmin, ai_ust, ai_kg = tahmin_ve_oran_hesapla(lid, None, None)
-
-            mac_metni = (
-                f"{durum_etiketi} | 🏆 <code>{lig}</code>\n"
-                f"⚔️ <b>{ev} vs {dep}</b>\n"
-                f"🎯 <b>AI TAHMİNİ:</b> <u>{tahmin}</u>\n"
-                f"📈 <b>2.5 Üst Güveni:</b> %{ai_ust}\n"
-                f"⚽ <b>KG Var Güveni:</b> %{ai_kg}\n"
-                f"-----------------------------------------\n"
-            )
-            if len(parca_mesaj) + len(mac_metni) > 3800:
-                telegram_post(parca_mesaj, chat_id)
-                parca_mesaj = ""
-            parca_mesaj += mac_metni
-
-        if parca_mesaj: telegram_post(parca_mesaj, chat_id)
+                mesaj = (
+                    f"⏳ <b>MAÇ BAŞLIYOR! (Bülten Tahmini)</b>\n"
+                    f"🏆 <code>{lig}</code>\n"
+                    f"⚔️ <b>{ev} vs {dep}</b>\n"
+                    f"⏰ Saat: <b>{saat_tsi}</b>\n"
+                    f"-----------------------------------------\n"
+                    f"🎯 <b>AI TAHMİNİ:</b> <u>{tahmin}</u>\n"
+                    f"📈 2.5 Üst: %{ai_ust} | ⚽ KG Var: %{ai_kg}\n"
+                    f"⚡ <i>Canlı takibe alındı!</i>"
+                )
+                telegram_post(mesaj)
+                YARIM_SAAT_BILDIRILENLER.add(fid)
 
     except Exception as e:
-        telegram_post(f"❌ Analiz hatası: {str(e)}", chat_id)
+        print("Yaklaşan maç kontrol hatası:", e)
 
 # ==========================================
-# 4. ARKA PLAN ZAMANLAYICISI
+# 3. SİSTEM 2: CANLI MAÇ SKOR & SÜREÇ TAKİBİ
+# ==========================================
+def canlı_mac_olaylarini_takip_et():
+    """Tüm canlı maçları tek sorguda çeker; Gol, İY bitti, 2Y başladı ve MS durumlarını bildirir."""
+    url = f"{BASE_URL}/fixtures"
+    params = {"live": "all"}
+    
+    try:
+        res = requests.get(url, params=params, headers=HEADERS, timeout=30)
+        data = res.json().get("response", [])
+        
+        for m in data:
+            fid = m["fixture"]["id"]
+            lig = m["league"]["name"]
+            ev = m["teams"]["home"]["name"]
+            dep = m["teams"]["away"]["name"]
+            
+            yeni_ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
+            yeni_dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
+            
+            yeni_durum = m["fixture"]["status"]["short"]
+            dakika = m["fixture"]["status"]["elapsed"]
+            dakika_str = f"{dakika}'" if dakika else ""
+
+            # İlk defa karşılaşılan canlı maç kaydı
+            if fid not in CANLI_TAKIP_HAFIZASI:
+                CANLI_TAKIP_HAFIZASI[fid] = {
+                    "home_goals": yeni_ev_gol,
+                    "away_goals": yeni_dep_gol,
+                    "status": yeni_durum
+                }
+                if yeni_durum == '1H' and (yeni_ev_gol + yeni_dep_gol == 0):
+                    telegram_post(f"🎬 <b>MAÇ BAŞLADI!</b>\n🏆 <code>{lig}</code>\n⚔️ <b>{ev} 0 - 0 {dep}</b>")
+                continue
+
+            eski_veri = CANLI_TAKIP_HAFIZASI[fid]
+
+            # A. GOL BİLDİRİMİ
+            if yeni_ev_gol > eski_veri["home_goals"] or yeni_dep_gol > eski_veri["away_goals"]:
+                atılan_taraf = ev if yeni_ev_gol > eski_veri["home_goals"] else dep
+                mesaj = (
+                    f"⚽ <b>GOL!</b> ({dakika_str})\n"
+                    f"🏆 <code>{lig}</code>\n"
+                    f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>\n"
+                    f"🔥 Gol: <b>{atılan_taraf}</b>"
+                )
+                telegram_post(mesaj)
+
+            # B. İLK YARI BİTTİ (HT)
+            if yeni_durum == 'HT' and eski_veri["status"] != 'HT':
+                mesaj = (
+                    f"⏸️ <b>İLK YARI BİTTİ</b>\n"
+                    f"🏆 <code>{lig}</code>\n"
+                    f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>"
+                )
+                telegram_post(mesaj)
+
+            # C. İKİNCİ YARI BAŞLADI (2H)
+            if yeni_durum == '2H' and eski_veri["status"] != '2H':
+                mesaj = (
+                    f"▶️ <b>İKİNCİ YARI BAŞLADI</b>\n"
+                    f"🏆 <code>{lig}</code>\n"
+                    f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>"
+                )
+                telegram_post(mesaj)
+
+            # D. MAÇ BİTTİ (FT)
+            if yeni_durum in ['FT', 'AET', 'PEN'] and eski_veri["status"] not in ['FT', 'AET', 'PEN']:
+                mesaj = (
+                    f"🏁 <b>MAÇ SONA ERDİ</b>\n"
+                    f"🏆 <code>{lig}</code>\n"
+                    f"⚔️ <b>{ev} {yeni_ev_gol} - {yeni_dep_gol} {dep}</b>"
+                )
+                telegram_post(mesaj)
+
+            # Hafızayı Güncelle
+            CANLI_TAKIP_HAFIZASI[fid] = {
+                "home_goals": yeni_ev_gol,
+                "away_goals": yeni_dep_gol,
+                "status": yeni_durum
+            }
+
+    except Exception as e:
+        print("Canlı takip hatası:", e)
+
+# ==========================================
+# 4. KOTA DOSTU ZAMANLAYICI (SCHEDULER)
 # ==========================================
 scheduler = BackgroundScheduler()
-# Her 5 dakikada bir otomatik canlı skor kontrolü yapar
-scheduler.add_job(func=api_canli_biten_maclari_kontrol_et, trigger="interval", minutes=5)
+
+# Yaklaşan maçlar: Her 30 dakikada 1 sorgu (Günlük ~24 istek)
+scheduler.add_job(func=yaklasan_maclari_kontrol_et, trigger="interval", minutes=30)
+
+# Canlı maçlar: Her 10 dakikada 1 sorgu (Günlük ~50-60 istek)
+scheduler.add_job(func=canlı_mac_olaylarini_takip_et, trigger="interval", minutes=10)
+
 scheduler.start()
 
 # ==========================================
-# 5. FLASK WEBHOOK
+# 5. FLASK WEBHOOK SERVİSİ
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
@@ -230,15 +241,14 @@ def telegram_webhook():
         chat_id = message["chat"]["id"]
         
         if text.lower() == "!analiz":
-            threading.Thread(target=bot_bulten_gorevi, args=(chat_id,)).start()
-        elif text.lower() == "!sonuc":
-            threading.Thread(target=api_canli_biten_maclari_kontrol_et, args=(chat_id,)).start()
+            threading.Thread(target=yaklasan_maclari_kontrol_et).start()
+            telegram_post("🔎 Yaklaşan maç bülteni taranıyor...", chat_id)
             
     return jsonify({"status": "ok"}), 200
 
 @app.route('/', methods=['GET'])
 def home():
-    return "AI Football Bot - Canlı Takip Servisi Aktif!", 200
+    return "AI Canlı Skor ve Takip Sistemi Aktif!", 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
