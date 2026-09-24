@@ -232,13 +232,13 @@ def telegram_ai_bulten_gonder(tarih_str, saat_str):
 # ==========================================
 # 3. OTOMATİK BİTEN MAÇLARI TEK TEK BİLDİRME
 # ==========================================
-def otomatik_biten_maclari_kontrol_et():
-    """Arka planda çalışıp biten maçları TEK TEK gruba bildirir."""
+def otomatik_biten_maclari_kontrol_et(chat_id=None):
+    """Biten maçları kontrol eder ve tek tek bildirir."""
     su_an = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an.strftime("%Y-%m-%d")
     
     veritabanini_kur()
-    maclari_cek_ve_guncelle(tarih_str) # Skorları güncelle
+    maclari_cek_ve_guncelle(tarih_str)
     
     conn = sqlite3.connect(DB_YOLU)
     cursor = conn.cursor()
@@ -249,10 +249,15 @@ def otomatik_biten_maclari_kontrol_et():
     """)
     biten_maclar = cursor.fetchall()
     
+    if not biten_maclar and chat_id:
+        telegram_post("ℹ️ Henüz sonuçlanmış yeni bir tahminli maç bulunmuyor.", chat_id)
+        conn.close()
+        return
+
     for m in biten_maclar:
         fid, lig, ev, dep, ev_gol, dep_gol, tahmin = m
-        toplam_gol = (ev_gol if ev_gol else 0) + (dep_gol if dep_gol else 0)
-        kg_durum = (ev_gol > 0 and dep_gol > 0)
+        toplam_gol = (ev_gol if ev_gol is not None else 0) + (dep_gol if dep_gol is not None else 0)
+        kg_durum = (ev_gol is not None and dep_gol is not None and ev_gol > 0 and dep_gol > 0)
         basarili = False
 
         if "2.5 ÜST & KG VAR" in tahmin:
@@ -264,7 +269,6 @@ def otomatik_biten_maclari_kontrol_et():
 
         durum_emoji = "✅ KAZANDI" if basarili else "❌ KAYBETTİ"
         
-        # TEK TEK ÖZEL BİLDİRİM MESAJI
         mesaj = (
             f"🏁 <b>MAÇ SONUÇLANDI!</b>\n"
             f"🏆 <code>{lig}</code>\n"
@@ -272,18 +276,17 @@ def otomatik_biten_maclari_kontrol_et():
             f"🎯 <b>AI Tahmini:</b> {tahmin}\n"
             f"📌 <b>Sonuç:</b> {durum_emoji}"
         )
-        telegram_post(mesaj)
+        telegram_post(mesaj, chat_id)
         cursor.execute("UPDATE maclar SET tahmin_basari = ? WHERE fixture_id = ?", (1 if basarili else 0, fid))
 
     conn.commit()
     conn.close()
 
 # ==========================================
-# 4. ARKA PLAN ZAMANLAYICISI (CRON JOB)
+# 4. ARKA PLAN ZAMANLAYICISI
 # ==========================================
 scheduler = BackgroundScheduler()
-# Her 10 dakikada bir otomatik maç skorlarını ve biten maçları tarar
-scheduler.add_job(func=otomatik_biten_maclari_kontrol_et, trigger="interval", minutes=10)
+scheduler.add_job(func=otomatik_biten_maclari_kontrol_et, trigger="interval", minutes=5)
 scheduler.start()
 
 # ==========================================
@@ -301,7 +304,7 @@ def bot_gorevini_calistir(chat_id):
             oranlari_cek_ve_guncelle(tarih_str)
             yapay_zeka_analiz_et(tarih_str)
             telegram_ai_bulten_gonder(tarih_str, saat_str)
-            otomatik_biten_maclari_kontrol_et()
+            otomatik_biten_maclari_kontrol_et(chat_id)
             telegram_post("✅ <b>İşlem tamamlandı! Bülten gruba iletildi.</b>", chat_id)
         else:
             telegram_post("⚠️ Bugüne ait analiz edilecek maç verisi bulunamadı.", chat_id)
@@ -318,6 +321,8 @@ def telegram_webhook():
         
         if text.lower() == "!analiz":
             threading.Thread(target=bot_gorevini_calistir, args=(chat_id,)).start()
+        elif text.lower() == "!sonuc":
+            threading.Thread(target=otomatik_biten_maclari_kontrol_et, args=(chat_id,)).start()
             
     return jsonify({"status": "ok"}), 200
 
