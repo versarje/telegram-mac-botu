@@ -6,6 +6,7 @@ import requests
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
@@ -192,7 +193,6 @@ def yapay_zeka_analiz_et(tarih_str):
 def telegram_ai_bulten_gonder(tarih_str, saat_str):
     conn = sqlite3.connect(DB_YOLU)
     cursor = conn.cursor()
-    # 'NS' (Başlamadı) ile birlikte '1H', 'HT', '2H', 'LIVE' (Canlı) olan maçları da alıyoruz
     cursor.execute("""
         SELECT fixture_id, saat, lig, ev_sahibi, deplasman, ust25, kg_var, ai_ust25_olasilik, ai_kgvar_olasilik, ai_tahmin, durum
         FROM maclar 
@@ -209,7 +209,6 @@ def telegram_ai_bulten_gonder(tarih_str, saat_str):
 
     for m in maclar:
         fid, saat, lig, ev, dep, ust25, kg_var, ai_ust, ai_kg, tahmin, durum = m
-        
         durum_etiketi = "🔴 CANLI" if durum in ['1H', '2H', 'HT', 'LIVE'] else f"⏰ {saat}"
 
         mac_metni = (
@@ -230,7 +229,17 @@ def telegram_ai_bulten_gonder(tarih_str, saat_str):
     conn.commit()
     conn.close()
 
-def mac_sonuclarini_kontrol_et_ve_bildir():
+# ==========================================
+# 3. OTOMATİK BİTEN MAÇLARI TEK TEK BİLDİRME
+# ==========================================
+def otomatik_biten_maclari_kontrol_et():
+    """Arka planda çalışıp biten maçları TEK TEK gruba bildirir."""
+    su_an = datetime.utcnow() + timedelta(hours=3)
+    tarih_str = su_an.strftime("%Y-%m-%d")
+    
+    veritabanini_kur()
+    maclari_cek_ve_guncelle(tarih_str) # Skorları güncelle
+    
     conn = sqlite3.connect(DB_YOLU)
     cursor = conn.cursor()
     cursor.execute("""
@@ -239,11 +248,7 @@ def mac_sonuclarini_kontrol_et_ve_bildir():
         WHERE durum IN ('FT', 'AET', 'PEN') AND ai_tahmin IS NOT NULL AND tahmin_basari IS NULL
     """)
     biten_maclar = cursor.fetchall()
-    if not biten_maclar:
-        conn.close()
-        return
-
-    mesaj = "🏁 <b>BİTEN MAÇLAR VE AI TAHMİN SONUÇLARI</b>\n=============================\n\n"
+    
     for m in biten_maclar:
         fid, lig, ev, dep, ev_gol, dep_gol, tahmin = m
         toplam_gol = (ev_gol if ev_gol else 0) + (dep_gol if dep_gol else 0)
@@ -258,18 +263,33 @@ def mac_sonuclarini_kontrol_et_ve_bildir():
             if kg_durum: basarili = True
 
         durum_emoji = "✅ KAZANDI" if basarili else "❌ KAYBETTİ"
-        mesaj += f"🏆 <code>{lig}</code>\n⚔️ <b>{ev} {ev_gol} - {dep_gol} {dep}</b>\n🎯 <b>Tahmin:</b> {tahmin}\n📌 <b>Sonuç:</b> {durum_emoji}\n-----------------------------------------\n"
+        
+        # TEK TEK ÖZEL BİLDİRİM MESAJI
+        mesaj = (
+            f"🏁 <b>MAÇ SONUÇLANDI!</b>\n"
+            f"🏆 <code>{lig}</code>\n"
+            f"⚔️ <b>{ev} {ev_gol} - {dep_gol} {dep}</b>\n"
+            f"🎯 <b>AI Tahmini:</b> {tahmin}\n"
+            f"📌 <b>Sonuç:</b> {durum_emoji}"
+        )
+        telegram_post(mesaj)
         cursor.execute("UPDATE maclar SET tahmin_basari = ? WHERE fixture_id = ?", (1 if basarili else 0, fid))
 
     conn.commit()
     conn.close()
-    telegram_post(mesaj)
 
 # ==========================================
-# 3. FLASK TELEGRAM WEBHOOK TETİKLEYİCİSİ
+# 4. ARKA PLAN ZAMANLAYICISI (CRON JOB)
+# ==========================================
+scheduler = BackgroundScheduler()
+# Her 10 dakikada bir otomatik maç skorlarını ve biten maçları tarar
+scheduler.add_job(func=otomatik_biten_maclari_kontrol_et, trigger="interval", minutes=10)
+scheduler.start()
+
+# ==========================================
+# 5. FLASK WEBHOOK
 # ==========================================
 def bot_gorevini_calistir(chat_id):
-    # Railway UTC çalıştırdığı için +3 saat ekleyerek Türkiye Saatini (TSİ) buluyoruz
     su_an = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an.strftime("%Y-%m-%d")
     saat_str = su_an.strftime("%H:%M")
@@ -281,8 +301,8 @@ def bot_gorevini_calistir(chat_id):
             oranlari_cek_ve_guncelle(tarih_str)
             yapay_zeka_analiz_et(tarih_str)
             telegram_ai_bulten_gonder(tarih_str, saat_str)
-            mac_sonuclarini_kontrol_et_ve_bildir()
-            telegram_post("✅ <b>İşlem tamamlandı! Bülten ve sonuçlar gruba iletildi.</b>", chat_id)
+            otomatik_biten_maclari_kontrol_et()
+            telegram_post("✅ <b>İşlem tamamlandı! Bülten gruba iletildi.</b>", chat_id)
         else:
             telegram_post("⚠️ Bugüne ait analiz edilecek maç verisi bulunamadı.", chat_id)
     except Exception as e:
@@ -303,7 +323,7 @@ def telegram_webhook():
 
 @app.route('/', methods=['GET'])
 def home():
-    return "AI Football Bot Webhook Sunucusu Aktif!", 200
+    return "AI Football Bot Webhook & Oto Takip Sunucusu Aktif!", 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
