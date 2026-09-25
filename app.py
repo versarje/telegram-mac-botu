@@ -17,15 +17,16 @@ BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# Railway / Render Variables'tan okur, yoksa fallback degere düşer
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+# Railway Variables sekmesinden okur. Lütfen Railway'de GITHUB_TOKEN olarak tanımlayın!
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = "versarje/telegram-mac-botu"
 GITHUB_FILE_PATH = "database.json"
 
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
 
+# Bearer yetkilendirme formatı güncellendi (401 hatasını çözer)
 HEADERS_GITHUB = {
-    "Authorization": f"token {GITHUB_TOKEN}",
+    "Authorization": f"Bearer {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json",
     "User-Agent": "Telegram-Soccer-Bot"
 }
@@ -73,7 +74,6 @@ def github_db_yaz(yeni_veri, sha_key):
             "content": encoded_content
         }
         
-        # Eğer var olan bir dosyayı güncelliyorsak 'sha' zorunludur
         if sha_key:
             payload["sha"] = sha_key
 
@@ -236,7 +236,7 @@ def gunun_bulteni(chat_id=None):
     telegram_post(mesaj, chat_id)
 
 # ==========================================
-# 3. MAÇ ANALİZİ VE DB'YE YAZMA (TEST ODAKLI)
+# 3. MAÇ ANALİZİ VE DB'YE YAZMA
 # ==========================================
 def analiz_getir(cmd_args, chat_id):
     if not cmd_args:
@@ -263,7 +263,6 @@ def analiz_getir(cmd_args, chat_id):
         m["league"]["id"], ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
     )
 
-    # Database İşlemleri
     db_veri, sha_key = github_db_oku()
     if "tahminler" not in db_veri: db_veri["tahminler"] = {}
     
