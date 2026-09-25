@@ -6,7 +6,6 @@ import requests
 import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
-from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
@@ -170,7 +169,7 @@ def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
-# 2. GÜNÜN BÜLTENİ
+# 2. GÜNÜN BÜLTENİ (SADECE GELECEK MAÇLAR)
 # ==========================================
 def gunun_bulteni(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
@@ -182,23 +181,23 @@ def gunun_bulteni(chat_id=None):
         return
 
     data = res_data.get("response", [])
-    db_veri, sha_key = github_db_oku()
-    
-    if "bulten" not in db_veri: db_veri["bulten"] = {}
-    if "tahminler" not in db_veri: db_veri["tahminler"] = {}
+
+    # Sadece Henüz Başlamamış Maçları Filtrele ('NS' - Not Started)
+    gelecek_maclar = [m for m in data if m["fixture"]["status"]["short"] == "NS"]
+
+    if not gelecek_maclar:
+        telegram_post("📅 Bugün oynanacak başka maç kalmadı.", chat_id)
+        return
+
+    # Maç zamanına göre en yakından en uzağa sırala
+    gelecek_maclar.sort(key=lambda m: m["fixture"]["date"])
 
     maclar_listesi = []
-    degisiklik_var_mi = False
-
-    for m in data:
+    for m in gelecek_maclar:
         fid = str(m["fixture"]["id"])
-        status = m["fixture"]["status"]["short"]
         lig = m["league"]["name"]
         ev = m["teams"]["home"]["name"]
         dep = m["teams"]["away"]["name"]
-        
-        ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
-        dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
         
         mac_zamani_raw = m["fixture"]["date"]
         try:
@@ -206,16 +205,66 @@ def gunun_bulteni(chat_id=None):
         except:
             saat_tsi = mac_zamani_raw[11:16]
 
+        maclar_listesi.append(
+            f"⏰ Saat: <b>{saat_tsi}</b> | ID: <code>{fid}</code>\n"
+            f"🏆 {lig}\n"
+            f"⚔️ <b>{ev} vs {dep}</b>\n"
+        )
+
+    mesaj = f"📅 <b>OYNaNACAK MAÇ BÜLTENİ ({tarih_str})</b>\n-----------------------------------------\n"
+    mesaj += "\n".join(maclar_listesi[:15])
+    
+    if len(maclar_listesi) > 15:
+        mesaj += f"\n\n<i>...ve {len(maclar_listesi) - 15} oynanacak maç daha mevcut.</i>"
+
+    telegram_post(mesaj, chat_id)
+
+# ==========================================
+# 3. BİTEN MAÇLARI / SONUÇLARI GETİR
+# ==========================================
+def mac_sonuclarini_getir(chat_id=None):
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
+
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    if not res_data or not res_data.get("response"):
+        telegram_post("🏁 Bugün biten maç bulunamadı veya API kotası doldu.", chat_id)
+        return
+
+    data = res_data.get("response", [])
+    
+    # Sadece Biten veya Oynanmakta olan maçları al
+    biten_maclar = [m for m in data if m["fixture"]["status"]["short"] in ['FT', 'AET', 'PEN', '1H', 'HT', '2H', 'ET', 'BT', 'P']]
+
+    if not biten_maclar:
+        telegram_post("🏁 Bugün henüz bitmiş veya oynanmakta olan maç bulunmuyor.", chat_id)
+        return
+
+    # En son bitenleri en üste koymak için ters sırala
+    biten_maclar.sort(key=lambda m: m["fixture"]["date"], reverse=True)
+
+    db_veri, sha_key = github_db_oku()
+    if "tahminler" not in db_veri: db_veri["tahminler"] = {}
+    degisiklik_var_mi = False
+
+    sonuc_listesi = []
+    for m in biten_maclar:
+        fid = str(m["fixture"]["id"])
+        status = m["fixture"]["status"]["short"]
+        lig = m["league"]["name"]
+        ev = m["teams"]["home"]["name"]
+        dep = m["teams"]["away"]["name"]
+        ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
+        dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
+
         durum_str = ""
         if status in ['FT', 'AET', 'PEN']:
             durum_str = f"🏁 <b>BİTTİ ({ev_gol}-{dep_gol})</b>"
-        elif status in ['1H', 'HT', '2H', 'ET', 'BT', 'P']:
+        else:
             elapsed = m["fixture"]["status"]["elapsed"]
             durum_str = f"🔥 <b>CANLI ({elapsed}' | {ev_gol}-{dep_gol})</b>"
-        else:
-            durum_str = f"⏰ Saat: <b>{saat_tsi}</b>"
 
-        # Biten Maçların Tahmin Durumlarını Güncelle
+        # Veritabanında tahmin yapılan bir maçsa durumunu güncelle
         if status in ['FT', 'AET', 'PEN'] and fid in db_veri["tahminler"]:
             if db_veri["tahminler"][fid]["durum"] == "⏳ BEKLENİYOR":
                 toplam_gol = ev_gol + dep_gol
@@ -231,7 +280,7 @@ def gunun_bulteni(chat_id=None):
                 db_veri["tahminler"][fid]["durum"] = "✅ TUTTU" if tuttu else "❌ GELMEDİ"
                 degisiklik_var_mi = True
 
-        maclar_listesi.append(
+        sonuc_listesi.append(
             f"{durum_str} | ID: <code>{fid}</code>\n"
             f"🏆 {lig}\n"
             f"⚔️ <b>{ev} vs {dep}</b>\n"
@@ -240,20 +289,16 @@ def gunun_bulteni(chat_id=None):
     if degisiklik_var_mi and sha_key:
         github_db_yaz(db_veri, sha_key)
 
-    if not maclar_listesi:
-        telegram_post("📅 Bugün gösterilecek maç bulunamadı.", chat_id)
-        return
+    mesaj = f"🏁 <b>GÜNÜN MAÇ SONUÇLARI ({tarih_str})</b>\n-----------------------------------------\n"
+    mesaj += "\n".join(sonuc_listesi[:15])
 
-    mesaj = f"📅 <b>BUGÜNÜN MAÇ BÜLTENİ ({tarih_str})</b>\n-----------------------------------------\n"
-    mesaj += "\n".join(maclar_listesi[:15])
-    
-    if len(maclar_listesi) > 15:
-        mesaj += f"\n\n<i>...ve {len(maclar_listesi) - 15} maç daha bültende mevcut.</i>"
+    if len(sonuc_listesi) > 15:
+        mesaj += f"\n\n<i>...ve {len(sonuc_listesi) - 15} maç sonucu daha mevcut.</i>"
 
     telegram_post(mesaj, chat_id)
 
 # ==========================================
-# 3. SKORBOARD, KOTA VE ANALİZ
+# 4. SKORBOARD, KOTA VE ANALİZ
 # ==========================================
 def analiz_getir(cmd_args, chat_id):
     if not cmd_args:
@@ -280,7 +325,6 @@ def analiz_getir(cmd_args, chat_id):
         m["league"]["id"], ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
     )
 
-    # Analiz yapılan maçı veritabanına kaydet
     db_veri, sha_key = github_db_oku()
     if "tahminler" not in db_veri: db_veri["tahminler"] = {}
     
@@ -357,13 +401,8 @@ def manuel_kota_bilgisi_getir(chat_id):
     telegram_post(mesaj, chat_id)
 
 # ==========================================
-# 4. SCHEDULER (Sadece Gece Sonu Raporu) & WEBHOOK
+# 5. FLASK WEBHOOK
 # ==========================================
-scheduler = BackgroundScheduler()
-# Sadece gece 23:59'da günün özet skorboard'unu gruba iletir
-scheduler.add_job(func=lambda: skorboard_getir(TELEGRAM_CHAT_ID), trigger="cron", hour=23, minute=59)
-scheduler.start()
-
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.get_json()
@@ -386,6 +425,9 @@ def telegram_webhook():
 
         elif komut in ["!bulten", "!maclar", "!bugun"]:
             threading.Thread(target=gunun_bulteni, args=(chat_id,)).start()
+
+        elif komut in ["!sonuc", "!sonuclar", "!bitenler"]:
+            threading.Thread(target=mac_sonuclarini_getir, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
 
