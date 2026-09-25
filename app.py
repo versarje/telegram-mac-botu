@@ -19,7 +19,7 @@ CURRENT_KEY_INDEX = 0
 
 BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
-TELEGRAM_CHAT_ID = "-5303351522"
+TELEGRAM_CHAT_ID = "-1004461429503"
 
 # Yerel Veritabanı Dosyası
 DB_FILE = "database.json"
@@ -60,7 +60,7 @@ def db_yaz(yeni_veri):
         return False
 
 # ==========================================
-# 1. YARDIMCI FONKSİYONLAR & OTOMATİK API GEÇİŞİ
+# 1. YARDIMCI FONKSİYONLAR & HASSAS API GEÇİŞİ
 # ==========================================
 def telegram_post(metin, chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
@@ -101,21 +101,27 @@ def api_request(endpoint, params=None, chat_id=None):
             res = requests.get(url, params=params, headers=headers, timeout=30)
             res_json = res.json()
 
+            # API-Sports Kota ve Hata Kontrolü
             errors = res_json.get("errors", {})
-            # API'den kota aşımı hatası dönüp dönmediğini kontrol et
-            if errors and ("rateLimit" in errors or "requests" in errors or "bug" in errors):
+            has_error = False
+
+            if isinstance(errors, dict) and len(errors) > 0:
+                has_error = True
+            elif isinstance(errors, list) and len(errors) > 0:
+                has_error = True
+
+            if has_error or res.status_code == 429:
                 eski_index = CURRENT_KEY_INDEX + 1
                 CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
                 yeni_index = CURRENT_KEY_INDEX + 1
 
-                # Telegram'a Kota Doldu Bildirimi Gönder
                 bildirim_mesaji = (
                     f"⚠️ <b>API KOTA BİLDİRİMİ</b>\n"
                     f"<code>Key {eski_index}</code> kotası doldu!\n"
                     f"🔄 Otomatik olarak <b>Key {yeni_index}</b> API anahtarına geçiş yapılıyor..."
                 )
                 telegram_post(bildirim_mesaji, chat_id)
-                print(f"⚠️ Key {eski_index} doldu, Key {yeni_index}'e geçildi.")
+                print(f"⚠️ Key {eski_index} doldu/hata verdi, Key {yeni_index}'e geçildi. Hata: {errors}")
 
                 deneme_sayisi += 1
                 continue
@@ -452,20 +458,19 @@ def telegram_webhook():
         parcalar = text.split()
         komut = parcalar[0].lower() if parcalar else ""
 
-        # Diğer botla çakışmaması için önekler '/' yapıldı
         if komut in ["/skorboard", "/tahminler"]:
             threading.Thread(target=skorboard_getir, args=(chat_id,)).start()
 
-        elif komut == "/analiz":
+        elif komut in ["/analiz", "/analiz"]:
             threading.Thread(target=analiz_getir, args=(parcalar[1:], chat_id)).start()
 
-        elif komut in ["/bulten", "/maclar", "/bugun"]:
+        elif komut in ["/bulten", "/bülten", "/maclar", "/bugun"]:
             threading.Thread(target=gunun_bulteni, args=(chat_id,)).start()
 
         elif komut in ["/sonuc", "/sonuclar", "/bitenler"]:
             threading.Thread(target=mac_sonuclarini_getir, args=(chat_id,)).start()
 
-        elif komut in ["/deger", "/oran", "/oranlar", "/bomba", "/surpriz", "/value", "/fırsat", "/firsat"]:
+        elif komut in ["/deger", "/değer", "/oran", "/oranlar", "/bomba", "/surpriz", "/sürpriz", "/value", "/fırsat", "/firsat"]:
             threading.Thread(target=value_bet_bul, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
