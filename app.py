@@ -465,7 +465,8 @@ def telegram_webhook():
         elif komut in ["!sonuc", "!sonuclar", "!bitenler"]:
             threading.Thread(target=mac_sonuclarini_getir, args=(chat_id,)).start()
 
-        elif komut in ["!value", "!valuerates", "!fırsat", "!firsat"]:
+        # Diğer botla çakışmayacak yeni alternatif komutlar
+        elif komut in ["!deger", "!oran", "!oranlar", "!bomba", "!surpriz", "!value", "!fırsat", "!firsat"]:
             threading.Thread(target=value_bet_bul, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
