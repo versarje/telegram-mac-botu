@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import base64
 import requests
 import threading
 from datetime import datetime, timedelta
@@ -10,27 +9,15 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ KONFİGÜRASYONLAR & GITHUB DB AYARLARI
+# ⚙️ KONFİGÜRASYONLAR & AYARLAR
 # ==========================================
 API_KEY = "b699d9effa443321a65fd145ec78ede1"
 BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# Railway / Render Variables sekmesinden okur (.strip() ile boşluk hatalarını engeller)
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = "versarje/telegram-mac-botu"
-GITHUB_FILE_PATH = "database.json"
-
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-
-# GitHub Rest API v3 Standart Başlıkları (401 Bad Credentials hatasını çözer)
-HEADERS_GITHUB = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "Telegram-Soccer-Bot"
-}
+# Yerel Veritabanı Dosyası (Railway üzerinde çalışır)
+DB_FILE = "database.json"
 
 HEADERS_API_SPORTS = {
     "x-apisports-key": API_KEY,
@@ -44,52 +31,32 @@ KOTA_TAKIP = {
 }
 
 # ==========================================
-# 🔄 GITHUB DATABASE OKUMA VE YAZMA SİSTEMİ
+# 🔄 YEREL VERİTABANI OKUMA VE YAZMA SİSTEMİ
 # ==========================================
-def github_db_oku():
+def db_oku():
+    if not os.path.exists(DB_FILE):
+        veri = {"tahminler": {}, "bulten": {}}
+        db_yaz(veri)
+        return veri
+
     try:
-        res = requests.get(GITHUB_API_URL, headers=HEADERS_GITHUB, timeout=10)
-        print(f"🔍 [DB OKUMA] Status: {res.status_code}")
-        
-        if res.status_code == 200:
-            content = res.json()
-            file_content = base64.b64decode(content["content"]).decode("utf-8")
-            data = json.loads(file_content)
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
             if "tahminler" not in data: data["tahminler"] = {}
             if "bulten" not in data: data["bulten"] = {}
-            return data, content["sha"]
-        else:
-            print(f"❌ [DB OKUMA HATASI]: {res.text}")
-            return {"tahminler": {}, "bulten": {}}, None
+            return data
     except Exception as e:
-        print("❌ [DB OKUMA EXCEPTION]:", e)
-        return {"tahminler": {}, "bulten": {}}, None
+        print("❌ [DB OKUMA HATASI]:", e)
+        return {"tahminler": {}, "bulten": {}}
 
-def github_db_yaz(yeni_veri, sha_key):
+def db_yaz(yeni_veri):
     try:
-        json_str = json.dumps(yeni_veri, ensure_ascii=False, indent=2)
-        encoded_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
-
-        payload = {
-            "message": "🤖 Bot Veri Tabanı Güncellendi",
-            "content": encoded_content
-        }
-        
-        if sha_key:
-            payload["sha"] = sha_key
-
-        res = requests.put(GITHUB_API_URL, json=payload, headers=HEADERS_GITHUB, timeout=10)
-        
-        print(f"📝 [DB YAZMA] Status: {res.status_code}")
-        if res.status_code in [200, 201]:
-            print("✅ GitHub database.json başarıyla güncellendi!")
-            return True
-        else:
-            print(f"❌ [DB YAZMA HATASI]: {res.text}")
-            return False
-            
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(yeni_veri, f, ensure_ascii=False, indent=2)
+        print("✅ Yerel database.json başarıyla güncellendi!")
+        return True
     except Exception as e:
-        print("❌ [DB YAZMA EXCEPTION]:", e)
+        print("❌ [DB YAZMA HATASI]:", e)
         return False
 
 # ==========================================
@@ -264,7 +231,7 @@ def analiz_getir(cmd_args, chat_id):
         m["league"]["id"], ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
     )
 
-    db_veri, sha_key = github_db_oku()
+    db_veri = db_oku()
     if "tahminler" not in db_veri: db_veri["tahminler"] = {}
     
     db_veri["tahminler"][fid] = {
@@ -276,7 +243,7 @@ def analiz_getir(cmd_args, chat_id):
     }
 
     print(f"📊 Yeni analiz veritabanına yazılıyor... (ID: {fid})")
-    basari = github_db_yaz(db_veri, sha_key)
+    basari = db_yaz(db_veri)
 
     mesaj = (
         f"🔍 <b>MAÇ DETAYLI ANALİZİ</b> (ID: <code>{fid}</code>)\n"
@@ -299,7 +266,7 @@ def analiz_getir(cmd_args, chat_id):
 # ==========================================
 def skorboard_getir(chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
-    db_veri, _ = github_db_oku()
+    db_veri = db_oku()
     tahminler = db_veri.get("tahminler", {})
 
     if not tahminler:
@@ -346,7 +313,7 @@ def mac_sonuclarini_getir(chat_id=None):
 
     biten_maclar.sort(key=lambda m: m["fixture"]["date"], reverse=True)
 
-    db_veri, sha_key = github_db_oku()
+    db_veri = db_oku()
     if "tahminler" not in db_veri: db_veri["tahminler"] = {}
     degisiklik_var_mi = False
 
@@ -383,8 +350,8 @@ def mac_sonuclarini_getir(chat_id=None):
             f"⚔️ <b>{ev} vs {dep}</b>\n"
         )
 
-    if degisiklik_var_mi and sha_key:
-        github_db_yaz(db_veri, sha_key)
+    if degisiklik_var_mi:
+        db_yaz(db_veri)
 
     mesaj = f"🏁 <b>GÜNÜN MAÇ SONUÇLARI ({tarih_str})</b>\n-----------------------------------------\n"
     mesaj += "\n".join(sonuc_listesi[:15])
