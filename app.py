@@ -17,17 +17,18 @@ BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# Railway Variables sekmesinden okur. Lütfen Railway'de GITHUB_TOKEN olarak tanımlayın!
+# Railway / Render Variables sekmesinden okur (.strip() ile boşluk hatalarını engeller)
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = "versarje/telegram-mac-botu"
 GITHUB_FILE_PATH = "database.json"
 
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
 
-# Bearer yetkilendirme formatı güncellendi (401 hatasını çözer)
+# GitHub Rest API v3 Standart Başlıkları (401 Bad Credentials hatasını çözer)
 HEADERS_GITHUB = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json",
+    "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "Telegram-Soccer-Bot"
 }
 
