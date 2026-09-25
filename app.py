@@ -11,10 +11,9 @@ app = Flask(__name__)
 # ==========================================
 # ⚙️ KONFİGÜRASYONLAR & AYARLAR
 # ==========================================
-# Buraya sırasıyla kullanmak istediğin API Key'lerini ekle
 API_KEYS = [
     "b699d9effa443321a65fd145ec78ede1",  # 1. API Key (Ana Hesap)
-    "42dd2582aa588e3a32a0cb1d207fcaa1"     # 2. API Key (Yedek Hesap)
+    "42dd2582aa588e3a32a0cb1d207fcaa1"   # 2. API Key (Yedek Hesap)
 ]
 CURRENT_KEY_INDEX = 0
 
@@ -277,7 +276,7 @@ def value_bet_bul(chat_id=None):
 
     mesaj = f"💎 <b>YÜKSEK ORANLI (VALUE) FIRSAT MAÇLARI ({tarih_str})</b>\n-----------------------------------------\n"
     mesaj += "\n".join(value_listesi)
-    mesaj += "\n💡 <i>Analiz için: <code>!analiz <ID></code> komutunu kullanabilirsiniz.</i>"
+    mesaj += "\n💡 <i>Analiz için: <code>/analiz <ID></code> komutunu kullanabilirsiniz.</i>"
 
     telegram_post(mesaj, chat_id)
 
@@ -286,7 +285,7 @@ def value_bet_bul(chat_id=None):
 # ==========================================
 def analiz_getir(cmd_args, chat_id):
     if not cmd_args:
-        telegram_post("📌 Kullanım: <code>!analiz <MAÇ_ID></code>", chat_id)
+        telegram_post("📌 Kullanım: <code>/analiz <MAÇ_ID></code>", chat_id)
         return
 
     fid = str(cmd_args[0])
@@ -453,20 +452,20 @@ def telegram_webhook():
         parcalar = text.split()
         komut = parcalar[0].lower() if parcalar else ""
 
-        if komut in ["!skorboard", "!tahminler"]:
+        # Diğer botla çakışmaması için önekler '/' yapıldı
+        if komut in ["/skorboard", "/tahminler"]:
             threading.Thread(target=skorboard_getir, args=(chat_id,)).start()
 
-        elif komut == "!analiz":
+        elif komut == "/analiz":
             threading.Thread(target=analiz_getir, args=(parcalar[1:], chat_id)).start()
 
-        elif komut in ["!bulten", "!maclar", "!bugun"]:
+        elif komut in ["/bulten", "/maclar", "/bugun"]:
             threading.Thread(target=gunun_bulteni, args=(chat_id,)).start()
 
-        elif komut in ["!sonuc", "!sonuclar", "!bitenler"]:
+        elif komut in ["/sonuc", "/sonuclar", "/bitenler"]:
             threading.Thread(target=mac_sonuclarini_getir, args=(chat_id,)).start()
 
-        # Diğer botla çakışmayacak yeni alternatif komutlar
-        elif komut in ["!deger", "!oran", "!oranlar", "!bomba", "!surpriz", "!value", "!fırsat", "!firsat"]:
+        elif komut in ["/deger", "/oran", "/oranlar", "/bomba", "/surpriz", "/value", "/fırsat", "/firsat"]:
             threading.Thread(target=value_bet_bul, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
