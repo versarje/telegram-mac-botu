@@ -12,8 +12,8 @@ app = Flask(__name__)
 # ⚙️ KONFİGÜRASYONLAR & AYARLAR
 # ==========================================
 API_KEYS = [
-    "b699d9effa443321a65fd145ec78ede1",  # 1. API Key (Ana Hesap)
-    "42dd2582aa588e3a32a0cb1d207fcaa1"   # 2. API Key (Yedek Hesap)
+    "b699d9effa443321a65fd145ec78ede1",  # 1. API Key
+    "42dd2582aa588e3a32a0cb1d207fcaa1"   # 2. API Key
 ]
 CURRENT_KEY_INDEX = 0
 
@@ -60,7 +60,7 @@ def db_yaz(yeni_veri):
         return False
 
 # ==========================================
-# 1. YARDIMCI FONKSİYONLAR & HASSAS API GEÇİŞİ
+# 1. YARDIMCI FONKSİYONLAR & AKILLI API GEÇİŞİ
 # ==========================================
 def telegram_post(metin, chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
@@ -80,7 +80,6 @@ def api_request(endpoint, params=None, chat_id=None):
     global CURRENT_KEY_INDEX, KOTA_TAKIP
     bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
     
-    # Gün değiştiyse kotaları ve ilk key'i sıfırla
     if KOTA_TAKIP["bugun_tarih"] != bugun:
         KOTA_TAKIP["bugun_tarih"] = bugun
         KOTA_TAKIP["harcanan_istek"] = 0
@@ -90,7 +89,7 @@ def api_request(endpoint, params=None, chat_id=None):
     toplam_key = len(API_KEYS)
 
     while deneme_sayisi < toplam_key:
-        active_key = API_KEYS[CURRENT_KEY_INDEX]
+        active_key = API_KEYS[CURRENT_KEY_INDEX].strip()
         headers = {
             "x-apisports-key": active_key,
             "Accept": "application/json"
@@ -101,40 +100,41 @@ def api_request(endpoint, params=None, chat_id=None):
             res = requests.get(url, params=params, headers=headers, timeout=30)
             res_json = res.json()
 
-            # API-Sports Kota ve Hata Kontrolü
             errors = res_json.get("errors", {})
-            has_error = False
 
-            if isinstance(errors, dict) and len(errors) > 0:
-                has_error = True
-            elif isinstance(errors, list) and len(errors) > 0:
-                has_error = True
+            # Gerçek Kota / Rate Limit denetimi
+            is_rate_limit = False
+            if isinstance(errors, dict):
+                if "requests" in errors or "rateLimit" in errors:
+                    is_rate_limit = True
+                elif errors:
+                    # Kota dışı bir hata varsa detayını kanala bas
+                    print(f"❌ API HATASI (Key {CURRENT_KEY_INDEX + 1}): {errors}")
+                    telegram_post(f"⚠️ <b>Key {CURRENT_KEY_INDEX + 1} API Hatası:</b> <code>{errors}</code>", chat_id)
 
-            if has_error or res.status_code == 429:
+            if is_rate_limit or res.status_code == 429:
                 eski_index = CURRENT_KEY_INDEX + 1
                 CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
                 yeni_index = CURRENT_KEY_INDEX + 1
 
-                bildirim_mesaji = (
-                    f"⚠️ <b>API KOTA BİLDİRİMİ</b>\n"
-                    f"<code>Key {eski_index}</code> kotası doldu!\n"
-                    f"🔄 Otomatik olarak <b>Key {yeni_index}</b> API anahtarına geçiş yapılıyor..."
-                )
-                telegram_post(bildirim_mesaji, chat_id)
-                print(f"⚠️ Key {eski_index} doldu/hata verdi, Key {yeni_index}'e geçildi. Hata: {errors}")
-
+                telegram_post(f"⚠️ <b>Key {eski_index}</b> kotası dolduğu için <b>Key {yeni_index}</b> kullanılıyor...", chat_id)
                 deneme_sayisi += 1
                 continue
 
-            KOTA_TAKIP["harcanan_istek"] += 1
-            return res_json
+            # Yanıt başarıyla geldiyse veriyi döndür
+            if res_json.get("response") is not None:
+                KOTA_TAKIP["harcanan_istek"] += 1
+                return res_json
+            else:
+                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
+                deneme_sayisi += 1
 
         except Exception as e:
-            print(f"❌ [API HATASI - Key {CURRENT_KEY_INDEX + 1}]:", e)
+            print(f"❌ [API BAGLANTI HATASI - Key {CURRENT_KEY_INDEX + 1}]:", e)
             CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
             deneme_sayisi += 1
 
-    telegram_post("⚠️ <b>TÜM API KEY'LERİN KOTASI DOLDU!</b>\nLütfen yeni bir API Key ekleyin veya yarını bekleyin.", chat_id)
+    telegram_post("⚠️ <b>TÜM API KEY'LERİN KOTASI DOLDU VEYA KEY'LER GEÇERSİZ!</b>", chat_id)
     return None
 
 def mac_oranlarini_getir(fixture_id, chat_id=None):
