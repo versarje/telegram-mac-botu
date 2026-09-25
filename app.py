@@ -11,7 +11,13 @@ app = Flask(__name__)
 # ==========================================
 # ⚙️ KONFİGÜRASYONLAR & AYARLAR
 # ==========================================
-API_KEY = "b699d9effa443321a65fd145ec78ede1"
+# Buraya sırasıyla kullanmak istediğin API Key'lerini ekle
+API_KEYS = [
+    "b699d9effa443321a65fd145ec78ede1",  # 1. API Key (Ana Hesap)
+    "42dd2582aa588e3a32a0cb1d207fcaa1"     # 2. API Key (Yedek Hesap)
+]
+CURRENT_KEY_INDEX = 0
+
 BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
@@ -19,15 +25,10 @@ TELEGRAM_CHAT_ID = "-1004461429503"
 # Yerel Veritabanı Dosyası
 DB_FILE = "database.json"
 
-HEADERS_API_SPORTS = {
-    "x-apisports-key": API_KEY,
-    "Accept": "application/json"
-}
-
 KOTA_TAKIP = {
     "bugun_tarih": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d"),
     "harcanan_istek": 0,
-    "max_limit": 100
+    "max_limit": 100 * len(API_KEYS)
 }
 
 # ==========================================
@@ -60,29 +61,8 @@ def db_yaz(yeni_veri):
         return False
 
 # ==========================================
-# 1. YARDIMCI FONKSİYONLAR
+# 1. YARDIMCI FONKSİYONLAR & OTOMATİK API GEÇİŞİ
 # ==========================================
-def api_request(endpoint, params=None):
-    global KOTA_TAKIP
-    bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
-    
-    if KOTA_TAKIP["bugun_tarih"] != bugun:
-        KOTA_TAKIP["bugun_tarih"] = bugun
-        KOTA_TAKIP["harcanan_istek"] = 0
-
-    if KOTA_TAKIP["harcanan_istek"] >= KOTA_TAKIP["max_limit"]:
-        print("⚠️ GÜNLÜK API KOTASI DOLDU!")
-        return None
-
-    url = f"{BASE_URL}/{endpoint}"
-    try:
-        res = requests.get(url, params=params, headers=HEADERS_API_SPORTS, timeout=30)
-        KOTA_TAKIP["harcanan_istek"] += 1
-        return res.json()
-    except Exception as e:
-        print("API İSTEK HATASI:", e)
-        return None
-
 def telegram_post(metin, chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -97,8 +77,63 @@ def telegram_post(metin, chat_id=None):
     except Exception as e:
         print("Telegram gonderme hatasi:", e)
 
-def mac_oranlarini_getir(fixture_id):
-    data = api_request("odds", {"fixture": fixture_id})
+def api_request(endpoint, params=None, chat_id=None):
+    global CURRENT_KEY_INDEX, KOTA_TAKIP
+    bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
+    
+    # Gün değiştiyse kotaları ve ilk key'i sıfırla
+    if KOTA_TAKIP["bugun_tarih"] != bugun:
+        KOTA_TAKIP["bugun_tarih"] = bugun
+        KOTA_TAKIP["harcanan_istek"] = 0
+        CURRENT_KEY_INDEX = 0
+
+    deneme_sayisi = 0
+    toplam_key = len(API_KEYS)
+
+    while deneme_sayisi < toplam_key:
+        active_key = API_KEYS[CURRENT_KEY_INDEX]
+        headers = {
+            "x-apisports-key": active_key,
+            "Accept": "application/json"
+        }
+
+        url = f"{BASE_URL}/{endpoint}"
+        try:
+            res = requests.get(url, params=params, headers=headers, timeout=30)
+            res_json = res.json()
+
+            errors = res_json.get("errors", {})
+            # API'den kota aşımı hatası dönüp dönmediğini kontrol et
+            if errors and ("rateLimit" in errors or "requests" in errors or "bug" in errors):
+                eski_index = CURRENT_KEY_INDEX + 1
+                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
+                yeni_index = CURRENT_KEY_INDEX + 1
+
+                # Telegram'a Kota Doldu Bildirimi Gönder
+                bildirim_mesaji = (
+                    f"⚠️ <b>API KOTA BİLDİRİMİ</b>\n"
+                    f"<code>Key {eski_index}</code> kotası doldu!\n"
+                    f"🔄 Otomatik olarak <b>Key {yeni_index}</b> API anahtarına geçiş yapılıyor..."
+                )
+                telegram_post(bildirim_mesaji, chat_id)
+                print(f"⚠️ Key {eski_index} doldu, Key {yeni_index}'e geçildi.")
+
+                deneme_sayisi += 1
+                continue
+
+            KOTA_TAKIP["harcanan_istek"] += 1
+            return res_json
+
+        except Exception as e:
+            print(f"❌ [API HATASI - Key {CURRENT_KEY_INDEX + 1}]:", e)
+            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
+            deneme_sayisi += 1
+
+    telegram_post("⚠️ <b>TÜM API KEY'LERİN KOTASI DOLDU!</b>\nLütfen yeni bir API Key ekleyin veya yarını bekleyin.", chat_id)
+    return None
+
+def mac_oranlarini_getir(fixture_id, chat_id=None):
+    data = api_request("odds", {"fixture": fixture_id}, chat_id=chat_id)
     ust25_oran, alt25_oran, kg_var_oran = None, None, None
 
     if data and data.get("response"):
@@ -160,9 +195,9 @@ def gunun_bulteni(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"}, chat_id=chat_id)
     if not res_data or not res_data.get("response"):
-        telegram_post("📅 Bugün için bültende maç bulunamadı veya API kotası doldu.", chat_id)
+        telegram_post("📅 Bugün için bültende maç bulunamadı veya tüm API kotaları doldu.", chat_id)
         return
 
     data = res_data.get("response", [])
@@ -204,19 +239,18 @@ def gunun_bulteni(chat_id=None):
     telegram_post(mesaj, chat_id)
 
 def value_bet_bul(chat_id=None):
-    """Bültendeki yüksek oranlı / değerli fırsat maçlarını yakalar"""
     telegram_post("🔍 <b>Value Bet ve Değerli Oranlar Taranıyor...</b>\n<i>Bu işlem oranları analiz ettiği için birkaç saniye sürebilir.</i>", chat_id)
     
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"}, chat_id=chat_id)
     if not res_data or not res_data.get("response"):
         telegram_post("⚠️ Bültende taranacak maç bulunamadı veya API kotası doldu.", chat_id)
         return
 
     data = res_data.get("response", [])
-    gelecek_maclar = [m for m in data if m["fixture"]["status"]["short"] == "NS"][:10]  # Kotayı korumak için ilk 10 maç analiz edilir
+    gelecek_maclar = [m for m in data if m["fixture"]["status"]["short"] == "NS"][:10]
 
     value_listesi = []
 
@@ -226,11 +260,10 @@ def value_bet_bul(chat_id=None):
         ev = m["teams"]["home"]["name"]
         dep = m["teams"]["away"]["name"]
 
-        ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
+        ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid, chat_id=chat_id)
         if not ust25_o and not alt25_o and not kg_var_o:
             continue
 
-        # Value Kriteri: Büronun açtığı oran 1.90 ve üzerindeyse ama gerçekleşme ihtimali %50'den yüksek görünüyorsa
         if ust25_o and ust25_o >= 1.95:
             value_listesi.append(f"💎 <b>{ev} vs {dep}</b> (ID: <code>{fid}</code>)\n🏆 {lig}\n🎯 Tahmin: <b>2.5 ÜST</b> | Büronun Oranı: <b>{ust25_o}</b> 🔥\n")
         elif alt25_o and alt25_o >= 1.95:
@@ -257,10 +290,10 @@ def analiz_getir(cmd_args, chat_id):
         return
 
     fid = str(cmd_args[0])
-    res = api_request("fixtures", {"id": fid})
+    res = api_request("fixtures", {"id": fid}, chat_id=chat_id)
 
     if not res or not res.get("response"):
-        telegram_post(f"❌ <b>{fid}</b> ID'li maç verisi bulunamadı.", chat_id)
+        telegram_post(f"❌ <b>{fid}</b> ID'li maç verisi bulunamadı veya tüm API kotaları doldu.", chat_id)
         return
 
     m = res["response"][0]
@@ -271,7 +304,7 @@ def analiz_getir(cmd_args, chat_id):
     ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
     dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
 
-    ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
+    ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid, chat_id=chat_id)
     tahmin_metni, tahmin_turu, ai_ust, ai_kg = tahmin_ve_oran_hesapla(
         m["league"]["id"], ust25=ust25_o, alt25=alt25_o, kg_var=kg_var_o
     )
@@ -344,7 +377,7 @@ def mac_sonuclarini_getir(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"}, chat_id=chat_id)
     if not res_data or not res_data.get("response"):
         telegram_post("🏁 Bugün biten maç bulunamadı veya API kotası doldu.", chat_id)
         return
