@@ -16,7 +16,7 @@ BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# Yerel Veritabanı Dosyası (Railway üzerinde çalışır)
+# Yerel Veritabanı Dosyası
 DB_FILE = "database.json"
 
 HEADERS_API_SPORTS = {
@@ -154,7 +154,7 @@ def tahmin_ve_oran_hesapla(lid, ust25=None, alt25=None, kg_var=None):
     return tahmin_metni, tahmin_turu, prob_ust, prob_kg
 
 # ==========================================
-# 2. GÜNÜN BÜLTENİ 
+# 2. GÜNÜN BÜLTENİ & VALUE BET FIRSATLARI
 # ==========================================
 def gunun_bulteni(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
@@ -200,6 +200,51 @@ def gunun_bulteni(chat_id=None):
     
     if len(maclar_listesi) > 15:
         mesaj += f"\n\n<i>...ve {len(maclar_listesi) - 15} oynanacak maç daha mevcut.</i>"
+
+    telegram_post(mesaj, chat_id)
+
+def value_bet_bul(chat_id=None):
+    """Bültendeki yüksek oranlı / değerli fırsat maçlarını yakalar"""
+    telegram_post("🔍 <b>Value Bet ve Değerli Oranlar Taranıyor...</b>\n<i>Bu işlem oranları analiz ettiği için birkaç saniye sürebilir.</i>", chat_id)
+    
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
+
+    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"})
+    if not res_data or not res_data.get("response"):
+        telegram_post("⚠️ Bültende taranacak maç bulunamadı veya API kotası doldu.", chat_id)
+        return
+
+    data = res_data.get("response", [])
+    gelecek_maclar = [m for m in data if m["fixture"]["status"]["short"] == "NS"][:10]  # Kotayı korumak için ilk 10 maç analiz edilir
+
+    value_listesi = []
+
+    for m in gelecek_maclar:
+        fid = str(m["fixture"]["id"])
+        lig = m["league"]["name"]
+        ev = m["teams"]["home"]["name"]
+        dep = m["teams"]["away"]["name"]
+
+        ust25_o, alt25_o, kg_var_o = mac_oranlarini_getir(fid)
+        if not ust25_o and not alt25_o and not kg_var_o:
+            continue
+
+        # Value Kriteri: Büronun açtığı oran 1.90 ve üzerindeyse ama gerçekleşme ihtimali %50'den yüksek görünüyorsa
+        if ust25_o and ust25_o >= 1.95:
+            value_listesi.append(f"💎 <b>{ev} vs {dep}</b> (ID: <code>{fid}</code>)\n🏆 {lig}\n🎯 Tahmin: <b>2.5 ÜST</b> | Büronun Oranı: <b>{ust25_o}</b> 🔥\n")
+        elif alt25_o and alt25_o >= 1.95:
+            value_listesi.append(f"💎 <b>{ev} vs {dep}</b> (ID: <code>{fid}</code>)\n🏆 {lig}\n🎯 Tahmin: <b>2.5 ALT</b> | Büronun Oranı: <b>{alt25_o}</b> 🔥\n")
+        elif kg_var_o and kg_var_o >= 1.95:
+            value_listesi.append(f"💎 <b>{ev} vs {dep}</b> (ID: <code>{fid}</code>)\n🏆 {lig}\n🎯 Tahmin: <b>KG VAR</b> | Büronun Oranı: <b>{kg_var_o}</b> 🔥\n")
+
+    if not value_listesi:
+        telegram_post("🎯 Şu an bültende belirlenen kriterlerde (1.95+ yüksek oranlı) Value Bet fırsatı bulunamadı.", chat_id)
+        return
+
+    mesaj = f"💎 <b>YÜKSEK ORANLI (VALUE) FIRSAT MAÇLARI ({tarih_str})</b>\n-----------------------------------------\n"
+    mesaj += "\n".join(value_listesi)
+    mesaj += "\n💡 <i>Analiz için: <code>!analiz <ID></code> komutunu kullanabilirsiniz.</i>"
 
     telegram_post(mesaj, chat_id)
 
@@ -362,7 +407,7 @@ def mac_sonuclarini_getir(chat_id=None):
     telegram_post(mesaj, chat_id)
 
 # ==========================================
-# 5. FLASK WEBHOOK
+# 5. FLASK WEBHOOK & KOMUT DİNLENMESİ
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
@@ -386,6 +431,9 @@ def telegram_webhook():
 
         elif komut in ["!sonuc", "!sonuclar", "!bitenler"]:
             threading.Thread(target=mac_sonuclarini_getir, args=(chat_id,)).start()
+
+        elif komut in ["!value", "!valuerates", "!fırsat", "!firsat"]:
+            threading.Thread(target=value_bet_bul, args=(chat_id,)).start()
 
     return jsonify({"status": "ok"}), 200
 
