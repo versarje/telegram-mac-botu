@@ -19,7 +19,7 @@ CURRENT_KEY_INDEX = 0
 
 BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
-TELEGRAM_CHAT_ID = "-1004461429503"
+TELEGRAM_CHAT_ID = "-5303351522"
 
 # Yerel Veritabanı Dosyası
 DB_FILE = "database.json"
