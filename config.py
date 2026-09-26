@@ -8,12 +8,7 @@ BASE_URL = f"https://{RAPIDAPI_HOST}"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1004461429503")
 
-# Aiven MySQL
-MYSQL_HOST = "mysql-2d07f53d-umuttopal51-ec18.e.aivencloud.com"
-MYSQL_PORT = 21611
-MYSQL_USER = "avnadmin"
-MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "AVNS_H5i1d0aVTmZE1CfZZrQ")
-MYSQL_DB = "defaultdb"
+
 
 # Sözlükler
 LIG_SOZLUK = {
