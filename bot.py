@@ -1,9 +1,16 @@
 import os
 import random
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import config
 from db import get_db_connection
+
+# Türkiye Saati (UTC+3) Ayarı
+TURKEY_TZ = timezone(timedelta(hours=3))
+
+def get_turkey_now():
+    """Türkiye yerel saatini döndürür."""
+    return datetime.now(TURKEY_TZ)
 
 def telegram_post(text, chat_id=None):
     """Telegram API üzerinden mesaj gönderir."""
@@ -43,8 +50,10 @@ def turkcelestir(metin, tur="takim"):
     return metin.strip()
 
 def timestamp_saate_cevir(ts):
+    """Timestamp değerini Türkiye saatine göre HH:MM formatına çevirir."""
     try:
-        return datetime.fromtimestamp(int(ts)).strftime("%H:%M")
+        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TURKEY_TZ)
+        return dt.strftime("%H:%M")
     except Exception:
         return "00:00"
 
@@ -57,40 +66,55 @@ def rastgele_tahmin_uret():
     return random.choice(tahminler)
 
 def api_yanitindan_maclari_ayikla(data):
-    if isinstance(data, dict):
-        if "response" in data and isinstance(data["response"], list):
-            return data["response"]
-        elif "events" in data and isinstance(data["events"], list):
-            return data["events"]
-        elif "data" in data and isinstance(data["data"], list):
-            return data["data"]
-    elif isinstance(data, list):
+    """API'nin farklı yanıt yapılarını esnek şekilde tarar."""
+    if isinstance(data, list):
         return data
+    if isinstance(data, dict):
+        # Olası tüm anahtar isimlerini kontrol et
+        for key in ["response", "events", "data", "matches", "results"]:
+            if key in data and isinstance(data[key], list):
+                return data[key]
+            elif key in data and isinstance(data[key], dict):
+                # Derinlemesine arama (örneğin data['response']['events'])
+                for sub_key in ["events", "matches"]:
+                    if sub_key in data[key] and isinstance(data[key][sub_key], list):
+                        return data[key][sub_key]
     return []
 
 # ==========================================
-# 1. API'DEN ÇEKİP VERİTABANINA KAYDETME
+# 1. API'DEN BÜLTEN ÇEKİP VERİTABANINA YÜKLE
 # ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None):
-    telegram_post("🔄 <b>Günün tüm bülteni API'den çekilip veritabanına işleniyor...</b>", chat_id)
+    now_tr = get_turkey_now()
+    bugun_tarih_str = now_tr.strftime("%Y-%m-%d")
+    
+    telegram_post(f"🔄 <b>{bugun_tarih_str} bülteni API'den çekiliyor...</b>", chat_id)
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
     
-    bugun_tarih = datetime.now().strftime("%Y-%m-%d")
-    url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih.replace('-', '')}"
+    # RapidAPI parametre yapısı (YYYY-MM-DD kabul eder)
+    url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str}"
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
         
         if res.status_code == 200:
-            events = api_yanitindan_maclari_ayikla(res.json())
+            raw_json = res.json()
+            events = api_yanitindan_maclari_ayikla(raw_json)
             
             if not events:
-                telegram_post("⚽ API'de bugün için kaydedilecek maç bulunamadı.", chat_id)
+                # Alternatif olarak tire olmadan dene
+                alt_url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str.replace('-', '')}"
+                res_alt = requests.get(alt_url, headers=headers, timeout=25)
+                if res_alt.status_code == 200:
+                    events = api_yanitindan_maclari_ayikla(res_alt.json())
+
+            if not events:
+                telegram_post("⚽ API'de bugün için kaydedilecek maç bulunamadı veya API yanıtı boş.", chat_id)
                 return
 
             tum_maclar = []
@@ -137,16 +161,17 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                 finally:
                     conn.close()
         else:
-            telegram_post("❌ API Bağlantı Hatası!", chat_id)
+            telegram_post(f"❌ API Bağlantı Hatası! Kod: {res.status_code}", chat_id)
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
 # ==========================================
-# 2. VERİTABANINDAN ÇEKİP LİSTELEME (/bbb)
+# 2. VERİTABANINDAN ÇEKİP TAHMİN SUNMA (/bbb)
 # ==========================================
 
 def veritabanindan_bulten_getir(chat_id=None):
-    simdiki_saat = datetime.now().strftime("%H:%M")
+    now_tr = get_turkey_now()
+    simdiki_saat = now_tr.strftime("%H:%M") # Türkiye saatine göre filtreler
     
     conn = get_db_connection()
     if not conn:
@@ -155,6 +180,7 @@ def veritabanindan_bulten_getir(chat_id=None):
 
     try:
         with conn.cursor() as cursor:
+            # Türkiye saatinden sonra başlayacak maçları çek
             sql = """
                 SELECT saat, ev_sahibi, deplasman, lig, tahmin 
                 FROM maclar 
