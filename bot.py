@@ -5,11 +5,9 @@ from datetime import datetime, timedelta, timezone
 import config
 from db import get_db_connection
 
-# Türkiye Saati (UTC+3)
 TURKEY_TZ = timezone(timedelta(hours=3))
 
 def get_turkey_now():
-    """Türkiye yerel saatini döndürür."""
     return datetime.now(TURKEY_TZ)
 
 def telegram_post(text, chat_id=None):
@@ -49,17 +47,11 @@ def turkcelestir(metin, tur="takim"):
     return metin.strip()
 
 def timestamp_saate_cevir(ts):
-    """
-    API'den gelen Unix Timestamp (UTC) bilgisini 
-    Türkiye saatine (+3 saat) çevirip HH:MM formatında verir.
-    """
     try:
         ts_int = int(ts)
-        # UTC datetime oluşturup Türkiye saat dilimine dönüştür
         dt = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(TURKEY_TZ)
         return dt.strftime("%H:%M")
-    except Exception as e:
-        print(f"Saat dönüştürme hatası: {e}")
+    except Exception:
         return "00:00"
 
 def rastgele_tahmin_uret():
@@ -117,6 +109,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             return
 
         tum_maclar = []
+        ornek_saatler = []
+
         for m in events:
             if not isinstance(m, dict):
                 continue
@@ -128,6 +122,9 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
             startTimestamp = m.get("startTimestamp")
             saat = timestamp_saate_cevir(startTimestamp) if startTimestamp else "00:00"
+
+            if len(ornek_saatler) < 3:
+                ornek_saatler.append(f"{saat} ({ev} vs {dep})")
 
             raw_lig = metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
             lig = turkcelestir(raw_lig, tur="lig")
@@ -154,11 +151,20 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                     for m in tum_maclar:
                         cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
                 conn.commit()
-                telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
+                
+                ornek_metin = "\n".join(ornek_saatler)
+                telegram_post(
+                    f"✅ <b>Bülten Başarıyla Güncellendi!</b>\n"
+                    f"Toplam <b>{len(tum_maclar)}</b> maç veritabanına yazıldı.\n\n"
+                    f"📍 <b>Örnek Kaydedilen Saatler:</b>\n{ornek_metin}", 
+                    chat_id
+                )
             except Exception as db_err:
                 telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
             finally:
                 conn.close()
+        else:
+            telegram_post("❌ DB Bağlantısı kurulamadığı için veri yazılamadı!", chat_id)
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
@@ -166,7 +172,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 # 2. VERİTABANINDAN ÇEKİP TAHMİN SUNMA (/bbb)
 # ==========================================
 
-def veritabanindan_bulten_getir(chat_id=None):
+def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
     now_tr = get_turkey_now()
     simdiki_saat = now_tr.strftime("%H:%M")
     
@@ -177,18 +183,29 @@ def veritabanindan_bulten_getir(chat_id=None):
 
     try:
         with conn.cursor() as cursor:
-            # Türkiye saatinden sonraki tüm maçları saat sırasıyla çek
-            sql = """
-                SELECT saat, ev_sahibi, deplasman, lig, tahmin 
-                FROM maclar 
-                WHERE saat >= %s 
-                ORDER BY saat ASC
-            """
-            cursor.execute(sql, (simdiki_saat,))
+            if filtreli:
+                sql = "SELECT saat, ev_sahibi, deplasman, lig, tahmin FROM maclar WHERE saat >= %s ORDER BY saat ASC"
+                cursor.execute(sql, (simdiki_saat,))
+            else:
+                # Saat filtresiz tüm maçları getirir (Test için)
+                sql = "SELECT saat, ev_sahibi, deplasman, lig, tahmin FROM maclar ORDER BY saat ASC"
+                cursor.execute(sql)
+
             maclar = cursor.fetchall()
 
         if not maclar:
-            telegram_post(f"⏰ Bugün saat {simdiki_saat} sonrası için kayıtlı maç kalmadı veya veritabanı boş.\nLütfen önce <b>/guncelle</b> yapın.", chat_id)
+            # Kaç tane toplam kayıt var kontrol et
+            with conn.cursor() as cursor2:
+                cursor2.execute("SELECT COUNT(*) as toplam FROM maclar")
+                toplam_db = cursor2.fetchone().get("toplam", 0)
+
+            telegram_post(
+                f"⏰ <b>Sonuç Bulunamadı!</b>\n"
+                f"Sorgu saati: <code>{simdiki_saat}</code>\n"
+                f"DB'deki Toplam Maç Sayısı: <b>{toplam_db}</b>\n\n"
+                f"<i>İpucu: Saat filtresiz bakmak için /bbb_all komutunu deneyin.</i>", 
+                chat_id
+            )
             return
 
         PARCA_BOYUTU = 15
@@ -201,8 +218,8 @@ def veritabanindan_bulten_getir(chat_id=None):
             sayfa_maclari = maclar[baslangic:bitis]
 
             mesaj_satirlari = [
-                f"🎯 <b>GÜNÜN KALAN MAÇLARI VE TAHMİNLERİ</b>",
-                f"📍 <i>Sayfa {sayfa + 1} / {min(toplam_sayfa, 3)} (Saat {simdiki_saat} Sonrası)</i>",
+                f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLERİ</b>",
+                f"📍 <i>Sayfa {sayfa + 1} / {min(toplam_sayfa, 3)} (Bulunan: {toplam_mac} Maç)</i>",
                 "-----------------------------------------"
             ]
 
@@ -216,7 +233,6 @@ def veritabanindan_bulten_getir(chat_id=None):
             telegram_post("\n".join(mesaj_satirlari), chat_id)
 
     except Exception as e:
-        print("❌ DB Okuma Hatası:", e)
-        telegram_post(f"❌ Veritabanından veriler çekilirken hata oluştu: {e}", chat_id)
+        telegram_post(f"❌ Veritabanı okuma hatası: {e}", chat_id)
     finally:
         conn.close()
