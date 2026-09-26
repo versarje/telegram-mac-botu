@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 import bot
-import config
 
 app = Flask(__name__)
 
@@ -32,7 +31,8 @@ def webhook():
             "📌 <b>Komutlar:</b>\n"
             "▫️ /guncelle - Güncel bülteni API'den çeker.\n"
             "▫️ /bbb - Günün kalan maçlarını listeler.\n"
-            "▫️ /bbb_all - Tüm maçları listeler."
+            "▫️ /bbb_all - Tüm maçları listeler.\n"
+            "▫️ /sonuclar - Biten maçların skorlarını ve tahminlerin tutup tutmadığını gösterir."
         )
         bot.telegram_post(mesaj, chat_id)
 
@@ -44,6 +44,9 @@ def webhook():
 
     elif komut in ["/bbb_all", "/hepsi"]:
         bot.veritabanindan_bulten_getir(chat_id, filtreli=False)
+
+    elif komut in ["/sonuclar", "/skorlar", "/bitenler"]:
+        bot.biten_maclari_getir(chat_id)
 
     return jsonify({"status": "ok"}), 200
 
