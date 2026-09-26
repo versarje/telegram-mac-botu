@@ -13,31 +13,48 @@ def index():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json(silent=True)
-    if not data or "message" not in data:
+    if not data:
         return "OK", 200
 
-    message = data["message"]
-    chat_id = message.get("chat", {}).get("id")
-    text = message.get("text", "").strip()
+    # Kullanıcı butonlara tıkladığında gelen callback sorgusunu yakala
+    if "callback_query" in data:
+        cq = data["callback_query"]
+        chat_id = cq["message"]["chat"]["id"]
+        message_id = cq["message"]["message_id"]
+        callback_data = cq.get("data", "")
 
-    if text in ["/start", "/help"]:
-        bot.telegram_post(
-            "👋 <b>Futbol Tahmin Botuna Hoş Geldiniz!</b>\n\n"
-            "Komutlar:\n"
-            "⚽ <b>/guncelle</b> - Bugünün maçlarını çeker ve veritabanına kaydeder.\n"
-            "📅 <b>/yarin</b> - Yarının bültenini çeker ve veritabanına kaydeder.\n"
-            "🏆 <b>/skorlar</b> - Dün ve bugünün biten maç skorlarını ve tahmin başarı oranını getirir.", 
-            chat_id
-        )
-    elif text == "/guncelle":
-        # Ağır API işlemini arkaplanda (Thread ile) başlatıyoruz ki timeout olmasın
-        threading.Thread(target=bot.bulteni_apiden_veritabanina_yukle, args=(chat_id,)).start()
-    elif text == "/yarin":
-        threading.Thread(target=bot.yarin_bultenini_yukle, args=(chat_id,)).start()
-    elif text in ["/skorlar", "/sonuclar"]:
-        threading.Thread(target=bot.biten_maclari_getir, args=(chat_id,)).start()
+        if callback_data.startswith("page_"):
+            try:
+                page_num = int(callback_data.split("_")[1])
+                text, markup = bot.get_paginated_matches_message(page_num)
+                bot.telegram_edit_message(chat_id, message_id, text, markup)
+            except Exception as e:
+                print(f"Pagination error: {e}")
 
-    # Telegram'a hemen 200 OK dönülür, böylece bağlantı kopmaz
+        return "OK", 200
+
+    # Normal mesajlar ve komutlar
+    if "message" in data:
+        message = data["message"]
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "").strip()
+
+        if text in ["/start", "/help"]:
+            bot.telegram_post(
+                "👋 <b>Futbol Tahmin Botuna Hoş Geldiniz!</b>\n\n"
+                "Komutlar:\n"
+                "⚽ <b>/guncelle</b> - Bugünün maçlarını çeker ve butonlu liste olarak sunar.\n"
+                "📅 <b>/yarin</b> - Yarının bültenini çeker ve kaydeder.\n"
+                "🏆 <b>/skorlar</b> - Kayıtlı maçları sayfa sayfa listeler.", 
+                chat_id
+            )
+        elif text == "/guncelle":
+            threading.Thread(target=bot.bulteni_apiden_veritabanina_yukle, args=(chat_id,)).start()
+        elif text == "/yarin":
+            threading.Thread(target=bot.yarin_bultenini_yukle, args=(chat_id,)).start()
+        elif text in ["/skorlar", "/sonuclar", "/maclar"]:
+            threading.Thread(target=bot.biten_maclari_getir, args=(chat_id,)).start()
+
     return "OK", 200
 
 if __name__ == "__main__":
