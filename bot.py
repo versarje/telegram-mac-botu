@@ -109,22 +109,25 @@ def api_yanitindan_maclari_ayikla(data):
     return []
 
 # ==========================================
-# 1. BÜLTENİ APİ'DEN ÇEKİP D1'E EKLE
+# 1. BÜLTENİ APİ'DEN ÇEKİP D1'E EKLE (TARİH DESTEKLİ)
 # ==========================================
 
-def bulteni_apiden_veritabanina_yukle(chat_id=None):
+def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
     init_d1_db()
-    now_tr = get_turkey_now()
-    bugun_tarih_str = now_tr.strftime("%Y-%m-%d")
     
-    telegram_post(f"🔄 <b>{bugun_tarih_str} bülteni API'den çekiliyor...</b>", chat_id)
+    # Tarih belirtilmediyse bugünü al
+    if not tarih_str:
+        now_tr = get_turkey_now()
+        tarih_str = now_tr.strftime("%Y-%m-%d")
+    
+    telegram_post(f"🔄 <b>{tarih_str} bülteni API'den çekiliyor...</b>", chat_id)
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
     
-    url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str}"
+    url = f"{config.BASE_URL}/football-get-matches-by-date?date={tarih_str}"
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
@@ -138,10 +141,10 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
         if not events:
             kota_mesaji = f"\n\n📊 <b>Kalan API Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
-            telegram_post(f"⚽ API'de bugün için maç bulunamadı.{kota_mesaji}", chat_id)
+            telegram_post(f"⚽ API'de {tarih_str} tarihi için maç bulunamadı.{kota_mesaji}", chat_id)
             return
 
-        # MEVCUT MAÇLARI HIZLICA TEK SORGUDA HAFIZAYA ÇEKİYORUZ (Perf. Optimizasyonu)
+        # MEVCUT MAÇLARI HIZLICA TEK SORGUDA HAFIZAYA ÇEKİYORUZ
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
         mevcut_set = {(m['ev_sahibi'], m['deplasman']) for m in mevcut_maclar_raw}
 
@@ -175,7 +178,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
         kota_bilgisi_str = f"\n💳 <b>Kalan API Kullanım Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
         telegram_post(
-            f"✅ <b>Bülten Güncellendi!</b>\n"
+            f"✅ <b>{tarih_str} Bülteni Güncellendi!</b>\n"
             f"Yeni eklenen: <b>{yeni_eklenen}</b> maç."
             f"{kota_bilgisi_str}", 
             chat_id
@@ -183,6 +186,13 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
+
+
+def yarin_bultenini_yukle(chat_id=None):
+    """Yarının bültenini tarih ekleyerek çeker."""
+    yarin_tr = get_turkey_now() + timedelta(days=1)
+    yarin_tarih_str = yarin_tr.strftime("%Y-%m-%d")
+    bulteni_apiden_veritabanina_yukle(chat_id=chat_id, tarih_str=yarin_tarih_str)
 
 # ==========================================
 # 2. DÜN VE BUGÜNÜN SKORLARINI D1'DE GÜNCELLE VE SKORLARI GETİR
@@ -242,7 +252,6 @@ def biten_maclari_getir(chat_id=None):
                 f"🎯 Tahmin: <b>{m['tahmin']}</b> -> <b>{durum}</b>\n\n"
             )
 
-            # Telegram 4096 karakter sınırına takılmamak için parçalı gönderim
             if len(mesaj_blok) + len(satir) > 3800:
                 telegram_post(mesaj_blok, chat_id)
                 mesaj_blok = ""
