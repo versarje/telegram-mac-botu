@@ -166,7 +166,12 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 # 2. VERİTABANINDAN ÇEKİP TAHMİN SUNMA (/bbb)
 # ==========================================
 
-def veritabanindan_bulten_getir(chat_id=None):
+def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
+    """
+    Veritabanındaki maçları getirir.
+    filtreli=True ise o anki Türkiye saatinden sonraki maçları filtreler.
+    filtreli=False ise saat filtresiz tüm maçları getirir.
+    """
     now_tr = get_turkey_now()
     simdiki_saat = now_tr.strftime("%H:%M")
     
@@ -177,23 +182,37 @@ def veritabanindan_bulten_getir(chat_id=None):
 
     try:
         with conn.cursor() as cursor:
-            # Türkiye saatinden sonraki tüm maçları saat sırasıyla çek
-            sql = """
-                SELECT saat, ev_sahibi, deplasman, lig, tahmin 
-                FROM maclar 
-                WHERE saat >= %s 
-                ORDER BY saat ASC
-            """
-            cursor.execute(sql, (simdiki_saat,))
+            if filtreli:
+                sql = """
+                    SELECT saat, ev_sahibi, deplasman, lig, tahmin 
+                    FROM maclar 
+                    WHERE saat >= %s 
+                    ORDER BY saat ASC
+                """
+                cursor.execute(sql, (simdiki_saat,))
+            else:
+                sql = """
+                    SELECT saat, ev_sahibi, deplasman, lig, tahmin 
+                    FROM maclar 
+                    ORDER BY saat ASC
+                """
+                cursor.execute(sql)
+
             maclar = cursor.fetchall()
 
         if not maclar:
-            telegram_post(f"⏰ Bugün saat {simdiki_saat} sonrası için kayıtlı maç kalmadı veya veritabanı boş.\nLütfen önce <b>/guncelle</b> yapın.", chat_id)
+            telegram_post(
+                f"⏰ Bugün saat {simdiki_saat} sonrası için kayıtlı maç kalmadı veya veritabanı boş.\n"
+                f"Tüm maçları görmek için <b>/bbb_all</b> yapın ya da bülteni <b>/guncelle</b> yapın.", 
+                chat_id
+            )
             return
 
         PARCA_BOYUTU = 15
         toplam_mac = len(maclar)
         toplam_sayfa = (toplam_mac + PARCA_BOYUTU - 1) // PARCA_BOYUTU
+
+        baslik_ek = f"(Saat {simdiki_saat} Sonrası)" if filtreli else "(Tüm Maçlar)"
 
         for sayfa in range(min(toplam_sayfa, 3)):
             baslangic = sayfa * PARCA_BOYUTU
@@ -201,8 +220,8 @@ def veritabanindan_bulten_getir(chat_id=None):
             sayfa_maclari = maclar[baslangic:bitis]
 
             mesaj_satirlari = [
-                f"🎯 <b>GÜNÜN KALAN MAÇLARI VE TAHMİNLERİ</b>",
-                f"📍 <i>Sayfa {sayfa + 1} / {min(toplam_sayfa, 3)} (Saat {simdiki_saat} Sonrası)</i>",
+                f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLERİ</b>",
+                f"📍 <i>Sayfa {sayfa + 1} / {min(toplam_sayfa, 3)} {baslik_ek}</i>",
                 "-----------------------------------------"
             ]
 
