@@ -48,7 +48,6 @@ def turkcelestir(metin, tur="takim"):
 
 def timestamp_saate_cevir(ts, time_str=None):
     if time_str and ":" in str(time_str):
-        # Örn: "27.09.2026 18:00" -> "18:00"
         parcalar = str(time_str).split()
         if len(parcalar) >= 2 and ":" in parcalar[1]:
             return parcalar[1][:5]
@@ -73,34 +72,10 @@ def rastgele_tahmin_uret():
     ]
     return random.choice(tahminler)
 
-def tahmin_kontrol_et(tahmin, ev_skor, dep_skor):
-    if ev_skor is None or dep_skor is None or ev_skor < 0 or dep_skor < 0:
-        return "⏳ Oynanmadı / Başlamadı"
-
-    toplam_gol = ev_skor + dep_skor
-    
-    if "MS 1" in tahmin:
-        return "✅ TUTTU" if ev_skor > dep_skor else "❌ TUTMADI"
-    elif "MS 2" in tahmin:
-        return "✅ TUTTU" if dep_skor > ev_skor else "❌ TUTMADI"
-    elif "MS X" in tahmin:
-        return "✅ TUTTU" if ev_skor == dep_skor else "❌ TUTMADI"
-    elif "KG VAR" in tahmin:
-        return "✅ TUTTU" if (ev_skor > 0 and dep_skor > 0) else "❌ TUTMADI"
-    elif "KG YOK" in tahmin:
-        return "✅ TUTTU" if (ev_skor == 0 or dep_skor == 0) else "❌ TUTMADI"
-    elif "2.5 ÜST" in tahmin:
-        return "✅ TUTTU" if toplam_gol > 2.5 else "❌ TUTMADI"
-    elif "2.5 ALT" in tahmin:
-        return "✅ TUTTU" if toplam_gol < 2.5 else "❌ TUTMADI"
-    
-    return "❓ Belirsiz"
-
 def api_yanitindan_maclari_ayikla(data):
     if not isinstance(data, dict):
         return []
     
-    # API yapısı: response -> matches dizisi
     response_obj = data.get("response", {})
     if isinstance(response_obj, dict):
         matches = response_obj.get("matches", [])
@@ -138,19 +113,20 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             matches = api_yanitindan_maclari_ayikla(res_json)
 
         if not matches:
-            telegram_post(f"⚠️ {gorunur_tarih} tarihi için maç bulunamadı veya API yanıtı boş.", chat_id)
+            telegram_post(f"⚠️ {gorunur_tarih} tarihi için API'den maç gelmedi.", chat_id)
             return
 
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
         mevcut_set = {(m['ev_sahibi'], m['deplasman']) for m in mevcut_maclar_raw}
 
         yeni_eklenen = 0
+        guncellenen = 0
 
         for m in matches:
             if not isinstance(m, dict):
                 continue
 
-            # API Yeni Obje Yapısı: home -> name / longName
+            match_api_id = str(m.get("id", ""))
             home_obj = m.get("home", {})
             away_obj = m.get("away", {})
             
@@ -160,15 +136,13 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            if not ev or not dep or (ev, dep) in mevcut_set:
+            if not ev or not dep:
                 continue
 
-            # Saat bilgisini timeTS veya time stringinden alma
             time_str = m.get("time")
             time_ts = m.get("timeTS")
             saat = timestamp_saate_cevir(time_ts, time_str)
 
-            # Lig Bilgisi
             tournament_obj = m.get("tournament", {})
             league_obj = m.get("league", {})
             raw_lig = (
@@ -179,15 +153,32 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             )
             lig = turkcelestir(raw_lig, tur="lig")
 
-            tahmin = rastgele_tahmin_uret()
-
-            sql = "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)"
-            execute_d1(sql, [saat, ev, dep, lig, tahmin])
+            # Skor ve Durum bilgileri
+            ev_skor = home_obj.get("score") if isinstance(home_obj, dict) else None
+            dep_skor = away_obj.get("score") if isinstance(away_obj, dict) else None
             
-            mevcut_set.add((ev, dep))
-            yeni_eklenen += 1
+            status_obj = m.get("status", {})
+            is_finished = status_obj.get("finished", False) if isinstance(status_obj, dict) else False
+            durum = "Bitti" if is_finished else "Oynanmadı"
 
-        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteninden <b>{yeni_eklenen}</b> yeni maç veritabanına yüklendi!", chat_id)
+            if (ev, dep) in mevcut_set:
+                # Var olan maçın skorunu ve durumunu güncelle
+                execute_d1(
+                    "UPDATE maclar SET ev_skor = ?, dep_skor = ?, durum = ? WHERE ev_sahibi = ? AND deplasman = ?",
+                    [ev_skor, dep_skor, durum, ev, dep]
+                )
+                guncellenen += 1
+            else:
+                # Yeni maçı ekle
+                tahmin = rastgele_tahmin_uret()
+                execute_d1(
+                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin, ev_skor, dep_skor, durum) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [saat, ev, dep, lig, tahmin, ev_skor, dep_skor, durum]
+                )
+                mevcut_set.add((ev, dep))
+                yeni_eklenen += 1
+
+        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteni işlendi:\n➕ <b>{yeni_eklenen}</b> yeni maç eklendi.\n🔄 <b>{guncellenen}</b> maçın skoru güncellendi.", chat_id)
 
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
@@ -197,4 +188,30 @@ def yarin_bultenini_yukle(chat_id=None):
     bulteni_apiden_veritabanina_yukle(chat_id=chat_id, dt_obj=yarin_tr)
 
 def biten_maclari_getir(chat_id=None):
-    telegram_post("🔄 Biten maçlar kontrol ediliyor...", chat_id)
+    init_d1_db()
+    try:
+        # Biten veya skoru olan maçları sorgula
+        maclar = execute_d1("SELECT * FROM maclar WHERE durum = 'Bitti' OR (ev_skor IS NOT NULL AND ev_skor >= 0)") or []
+        
+        if not maclar:
+            # Durum alanı bitti yapılmamışsa tüm listeyi deneyelim
+            maclar = execute_d1("SELECT * FROM maclar WHERE ev_skor IS NOT NULL") or []
+
+        if not maclar:
+            telegram_post("📊 Henüz skoru girilmiş veya biten maç bulunmuyor.", chat_id)
+            return
+
+        mesaj = "🏆 <b>BİTEN MAÇLAR VE SKORLAR</b>\n\n"
+        for m in maclar[:15]:  # Mesaj sınırı için ilk 15 maç
+            ev = m.get("ev_sahibi", "")
+            dep = m.get("deplasman", "")
+            ev_s = m.get("ev_skor", 0)
+            dep_s = m.get("dep_skor", 0)
+            tahmin = m.get("tahmin", "")
+            saat = m.get("saat", "00:00")
+            
+            mesaj += f"⏰ {saat} | {ev} {ev_s} - {dep_s} {dep}\n💡 Tahmin: {tahmin}\n-------------------\n"
+
+        telegram_post(mesaj, chat_id)
+    except Exception as e:
+        telegram_post(f"❌ Skorlar getirilirken hata oluştu: {e}", chat_id)
