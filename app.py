@@ -14,7 +14,7 @@ app = Flask(__name__)
 # ==========================================
 API_KEYS = [
     "b699d9effa443321a65fd145ec78ede1",  # 1. API Key
-    "42dd2582aa588e3a32a0cb1d207fcaa1"   # 2. API Key (Aktif ve geçerli bir key ile değiştirin)
+
 ]
 CURRENT_KEY_INDEX = 0
 
