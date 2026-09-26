@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Bot Aktif!", 200
+    return "Bot Servisi Aktif!", 200
 
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
@@ -28,7 +28,7 @@ def telegram_webhook():
             if komut in ["/start", "/yardim"]:
                 mesaj = (
                     "🤖 <b>Futbol Tahmin Botu</b>\n\n"
-                    " Komutlar:\n"
+                    "📌 <b>Komutlar:</b>\n"
                     "▫️ /guncelle - Güncel bülteni API'den çeker ve veritabanına kaydeder.\n"
                     "▫️ /bbb - Günün kalan maçlarını ve tahminleri listeler.\n"
                     "▫️ /bbb_all - Saat filtresiz veritabanındaki tüm maçları listeler (Test)."
