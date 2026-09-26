@@ -25,7 +25,7 @@ TELEGRAM_CHAT_ID = "-1004461429503"
 MYSQL_HOST = "mysql-2d07f53d-umuttopal51-ec18.e.aivencloud.com"
 MYSQL_PORT = 21611
 MYSQL_USER = "avnadmin"
-MYSQL_PASSWORD = "AVNS_H5i1d0aVTmZE1CfZZrQ"
+MYSQL_PASSWORD = "<redacted>"
 MYSQL_DB = "defaultdb"
 
 # ==========================================
@@ -64,14 +64,12 @@ def turkcelestir(metin, tur="takim"):
     if not metin:
         return "Bilinmiyor"
     
-    # Sözlük kontrolü
     sozluk = LIG_SOZLUK if tur == "lig" else TAKIM_SOZLUK
     for eng, tr in sozluk.items():
         if eng.lower() in metin.lower():
             return tr
             
     if tur == "takim":
-        # Takım isimlerindeki genel ekleri temizleme
         metin = re.sub(r'\b(FC|CF|BSC|FK|SK|SV|AC|SC)\b', '', metin, flags=re.IGNORECASE).strip()
         
     return metin
@@ -90,6 +88,7 @@ def db_baglan():
     )
 
 def tablo_kur():
+    """Uygulama ayağa kalktığında tablo yoksa oluşturur."""
     try:
         conn = db_baglan()
         with conn.cursor() as cursor:
@@ -114,7 +113,7 @@ def tablo_kur():
 tablo_kur()
 
 # ==========================================
-# 1. TELEGRAM & API İSTEK FONKSİYONLARI
+# 1. YARDIMCI FONKSİYONLAR & API
 # ==========================================
 def telegram_post(metin, chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
@@ -129,47 +128,6 @@ def telegram_post(metin, chat_id=None):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print("Telegram gonderme hatasi:", e)
-
-def api_request(endpoint, params=None):
-    headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": RAPIDAPI_HOST
-    }
-    url = f"{BASE_URL}/{endpoint}"
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=20)
-        if res.status_code == 200:
-            return res.json()
-        else:
-            print(f"❌ API Hatası [{res.status_code}]: {res.text}")
-            return None
-    except Exception as e:
-        print("❌ API İstek Hatası:", e)
-        return None
-
-def gunun_maclarini_cek():
-    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
-    formatli_tarih = su_an_tsi.strftime("%Y%m%d")
-    
-    endpoint = "football-get-matches-by-date"
-    res = api_request(endpoint, {"date": formatli_tarih})
-    
-    if not res:
-        return []
-        
-    if isinstance(res, dict):
-        if "response" in res and isinstance(res["response"], list):
-            return res["response"]
-        elif "status" in res and res["status"] == "success":
-            data = res.get("response", res.get("data", {}))
-            if isinstance(data, list): return data
-            if isinstance(data, dict): return data.get("matches", data.get("events", []))
-        elif "events" in res:
-            return res["events"]
-    elif isinstance(res, list):
-        return res
-
-    return []
 
 def metin_veya_sozlukten_al(data, *anahtarlar):
     if not data: return ""
@@ -194,82 +152,166 @@ def akilli_tahmin_uret(match_id, ev, dep):
     indeks = seed % len(TAHMINLER)
     return TAHMINLER[indeks]
 
+def gunun_maclarini_cek():
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    formatli_tarih = su_an_tsi.strftime("%Y%m%d")
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST
+    }
+    url = f"{BASE_URL}/football-get-matches-by-date"
+    try:
+        res = requests.get(url, headers=headers, params={"date": formatli_tarih}, timeout=20)
+        if res.status_code == 200:
+            res_json = res.json()
+            if isinstance(res_json, dict):
+                return res_json.get("response", res_json.get("events", res_json.get("data", [])))
+            elif isinstance(res_json, list):
+                return res_json
+    except Exception as e:
+        print("❌ API İstek Hatası:", e)
+    return []
+
 # ==========================================
-# 2. TÜRKÇELEŞTİRİLMİŞ BÜLTEN (/bbb)
+# 2. TÜRKÇELEŞTİRİLMİŞ, SIRALI & ORANLI BÜLTEN (/bbb)
 # ==========================================
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_gorunum = su_an_tsi.strftime("%Y-%m-%d")
 
-    telegram_post("🔄 <b>Günün futbol bülteni çekiliyor...</b>", chat_id)
+    telegram_post("🔄 <b>Günün futbol bülteni ve oranları çekiliyor...</b>", chat_id)
 
-    events = gunun_maclarini_cek()
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST
+    }
+    formatli_tarih = su_an_tsi.strftime("%Y%m%d")
+    url = f"{BASE_URL}/football-get-matches-by-date"
     
+    events = []
+    kalan_istek = "Bilinmiyor"
+    toplam_limit = "Bilinmiyor"
+
+    try:
+        res = requests.get(url, headers=headers, params={"date": formatli_tarih}, timeout=20)
+        
+        # RapidAPI kalan kota bilgilerini header'dan çekiyoruz
+        kalan_istek = res.headers.get("x-ratelimit-requests-remaining", "Bilinmiyor")
+        toplam_limit = res.headers.get("x-ratelimit-requests-limit", "Bilinmiyor")
+
+        if res.status_code == 200:
+            res_json = res.json()
+            if isinstance(res_json, dict):
+                events = res_json.get("response", res_json.get("events", res_json.get("data", [])))
+            elif isinstance(res_json, list):
+                events = res_json
+    except Exception as e:
+        print("❌ API İstek Hatası:", e)
+
     if not events:
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API bağlantısı kurulamadı.", chat_id)
         return
 
+    # --- 1. MAÇLARI HAZIRLAMA VE SAATE GÖRE SIRALAMA ---
+    islenmis_maclar = []
+    
+    for i, m in enumerate(events):
+        fid = str(m.get("id", m.get("match_id", m.get("eventId", i))))
+        
+        raw_lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
+                  metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
+
+        raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or \
+                 metin_veya_sozlukten_al(m.get("home_team"), "name") or \
+                 metin_veya_sozlukten_al(m.get("home"), "name") or "Ev Sahibi"
+
+        raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or \
+                  metin_veya_sozlukten_al(m.get("away_team"), "name") or \
+                  metin_veya_sozlukten_al(m.get("away"), "name") or "Deplasman"
+
+        # Türkçe Dönüşümleri
+        lig = turkcelestir(raw_lig, tur="lig")
+        ev = turkcelestir(raw_ev, tur="takim")
+        dep = turkcelestir(raw_dep, tur="takim")
+
+        # Saat Hesaplama
+        time_val = m.get("time", m.get("start_time", ""))
+        timestamp = m.get("startTimestamp", None)
+
+        if timestamp and isinstance(timestamp, (int, float)):
+            saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
+        elif time_val and ":" in str(time_val):
+            saat_parca = str(time_val).split()
+            saat_tsi = saat_parca[-1] if len(saat_parca) > 1 else str(time_val)
+        else:
+            saat_tsi = "99:99"  # Saati belirsiz olanlar en sona
+
+        # Oran Çekimi (Var ise)
+        odds_data = m.get("odds", m.get("mainOdds", {}))
+        oran_metni = ""
+        if isinstance(odds_data, dict) and odds_data:
+            ms1 = odds_data.get("home", odds_data.get("1", "-"))
+            msx = odds_data.get("draw", odds_data.get("X", "-"))
+            ms2 = odds_data.get("away", odds_data.get("2", "-"))
+            if ms1 != "-" or ms2 != "-":
+                oran_metni = f"📊 Oranlar: MS1: <b>{ms1}</b> | MSX: <b>{msx}</b> | MS2: <b>{ms2}</b>\n"
+
+        secilen_tahmin_metin, secilen_tahmin_tur = akilli_tahmin_uret(fid, ev, dep)
+
+        islenmis_maclar.append({
+            "fid": fid,
+            "saat": saat_tsi,
+            "lig": lig,
+            "ev": ev,
+            "dep": dep,
+            "mac_adi": f"{ev} vs {dep}",
+            "tahmin_metin": secilen_tahmin_metin,
+            "tahmin_tur": secilen_tahmin_tur,
+            "oran_metni": oran_metni
+        })
+
+    # Kronolojik olarak saate göre sırala (00:00 -> 23:59)
+    islenmis_maclar.sort(key=lambda x: x["saat"])
+
+    # --- 2. VERİTABANINA KAYIT VE MESAJ OLUŞTURMA ---
     mesaj_satirlari = [
         f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLER ({tarih_gorunum})</b>",
         "-----------------------------------------"
     ]
 
-    islenen_mac_sayisi = 0
     conn = db_baglan()
+    islenen_mac_sayisi = 0
 
     try:
         with conn.cursor() as cursor:
-            for m in events[:15]:
-                fid = str(m.get("id", m.get("match_id", m.get("eventId", islenen_mac_sayisi))))
-                
-                raw_lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
-                          metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
-
-                raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or \
-                         metin_veya_sozlukten_al(m.get("home_team"), "name") or \
-                         metin_veya_sozlukten_al(m.get("home"), "name") or "Ev Sahibi"
-
-                raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or \
-                          metin_veya_sozlukten_al(m.get("away_team"), "name") or \
-                          metin_veya_sozlukten_al(m.get("away"), "name") or "Deplasman"
-
-                # Türkçe Dönüşümleri
-                lig = turkcelestir(raw_lig, tur="lig")
-                ev = turkcelestir(raw_ev, tur="takim")
-                dep = turkcelestir(raw_dep, tur="takim")
-
-                time_val = m.get("time", m.get("start_time", ""))
-                timestamp = m.get("startTimestamp", None)
-
-                if timestamp and isinstance(timestamp, (int, float)):
-                    saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
-                elif time_val and ":" in str(time_val):
-                    saat_parca = str(time_val).split()
-                    saat_tsi = saat_parca[-1] if len(saat_parca) > 1 else str(time_val)
-                else:
-                    saat_tsi = "--:--"
-
-                secilen_tahmin_metin, secilen_tahmin_tur = akilli_tahmin_uret(fid, ev, dep)
-                mac_adi = f"{ev} vs {dep}"
-
+            for item in islenmis_maclar[:15]:  # İlk 15 Maç
                 sql = """
                     INSERT INTO tahminler (match_id, mac, lig, saat, tahmin, tur, tarih)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE mac=%s, saat=%s, tarih=%s;
                 """
-                cursor.execute(sql, (fid, mac_adi, lig, saat_tsi, secilen_tahmin_metin, secilen_tahmin_tur, tarih_gorunum, mac_adi, saat_tsi, tarih_gorunum))
+                cursor.execute(sql, (
+                    item["fid"], item["mac_adi"], item["lig"], item["saat"], 
+                    item["tahmin_metin"], item["tahmin_tur"], tarih_gorunum,
+                    item["mac_adi"], item["saat"], tarih_gorunum
+                ))
 
                 mesaj_satirlari.append(
-                    f"⏰ <b>{saat_tsi}</b> | 🏆 <i>{lig}</i>\n"
-                    f"⚔️ <b>{ev} vs {dep}</b>\n"
-                    f"🎯 Tahmin: <b>{secilen_tahmin_metin}</b>\n"
+                    f"⏰ <b>{item['saat']}</b> | 🏆 <i>{item['lig']}</i>\n"
+                    f"⚔️ <b>{item['ev']} vs {item['dep']}</b>\n"
+                    f"{item['oran_metni']}"
+                    f"🎯 Tahmin: <b>{item['tahmin_metin']}</b>\n"
                 )
                 islenen_mac_sayisi += 1
     finally:
         conn.close()
 
     mesaj_satirlari.append("-----------------------------------------")
-    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazabilirsiniz.</i>")
+    mesaj_satirlari.append(
+        f"💾 <b>{islenen_mac_sayisi} maç Aiven MySQL veritabanına kaydedildi.</b>\n"
+        f"📊 <b>Kalan API Hakkınız:</b> {kalan_istek} / {toplam_limit}\n"
+        f"<i>Maçlar bitince /sonuc yazarak kontrol edebilirsiniz.</i>"
+    )
 
     telegram_post("\n".join(mesaj_satirlari), chat_id)
 
@@ -331,7 +373,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
 
                     cursor.execute("UPDATE tahminler SET skor = %s, durum = %s WHERE match_id = %s", (yeni_skor, yeni_durum, fid))
 
-            cursor.execute("SELECT * FROM tahminler WHERE tarih = %s", (tarih_gorunum,))
+            cursor.execute("SELECT * FROM tahminler WHERE tarih = %s ORDER BY saat ASC", (tarih_gorunum,))
             tahminler = cursor.fetchall()
     finally:
         conn.close()
@@ -372,7 +414,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     telegram_post("\n".join(rapor), chat_id)
 
 # ==========================================
-# 4. WEBHOOK & LİSTEN
+# 4. WEBHOOK & DINLEYICI
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
