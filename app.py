@@ -18,45 +18,46 @@ def home():
 def telegram_webhook():
     data = request.get_json(silent=True) or {}
     
-    if "message" in data:
-        message = data["message"]
-        chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "").strip()
+    # Telegram mesaj kontrolü (normal veya düzenlenmiş mesajlar için)
+    message = data.get("message") or data.get("edited_message") or {}
+    chat_id = message.get("chat", {}).get("id")
+    text = message.get("text", "").strip()
 
-        if text.startswith("/"):
-            komut = text.split()[0].lower()
+    if text and chat_id:
+        komut = text.split()[0].lower()
 
-            if komut in ["/start", "/yardim"]:
-                mesaj = (
-                    "🤖 <b>Futbol Tahmin Botu</b>\n\n"
-                    "📌 <b>Komutlar:</b>\n"
-                    "▫️ /guncelle - Güncel bülteni API'den çeker ve veritabanına kaydeder.\n"
-                    "▫️ /bbb - Günün kalan maçlarını ve tahminleri listeler.\n"
-                    "▫️ /bbb_all - Saat filtresiz veritabanındaki tüm maçları listeler (Test)."
-                )
-                telegram_post(mesaj, chat_id)
+        if komut in ["/start", "/yardim"]:
+            mesaj = (
+                "🤖 <b>Futbol Tahmin Botu</b>\n\n"
+                "📌 <b>Komutlar:</b>\n"
+                "▫️ /guncelle - Güncel bülteni API'den çeker ve veritabanına kaydeder.\n"
+                "▫️ /bbb - Günün kalan maçlarını ve tahminleri listeler.\n"
+                "▫️ /bbb_all - Saat filtresiz veritabanındaki tüm maçları listeler (Test)."
+            )
+            telegram_post(mesaj, chat_id)
 
-            elif komut in ["/guncelle", "/update"]:
-                threading.Thread(
-                    target=bulteni_apiden_veritabanina_yukle, 
-                    args=(chat_id,)
-                ).start()
+        elif komut in ["/guncelle", "/update"]:
+            threading.Thread(
+                target=bulteni_apiden_veritabanina_yukle, 
+                args=(chat_id,)
+            ).start()
 
-            elif komut in ["/bbb", "/ototahmin", "/bulten"]:
-                threading.Thread(
-                    target=veritabanindan_bulten_getir, 
-                    args=(chat_id, True)
-                ).start()
+        elif komut in ["/bbb", "/ototahmin", "/bulten"]:
+            # filtreli=True parametresi ile çağrılır (Saat filtresi aktif)
+            threading.Thread(
+                target=veritabanindan_bulten_getir, 
+                args=(chat_id, True)
+            ).start()
 
-            elif komut in ["/bbb_all", "/hepsi"]:
-                threading.Thread(
-                    target=veritabanindan_bulten_getir, 
-                    args=(chat_id, False)
-                ).start()
+        elif komut in ["/bbb_all", "/hepsi"]:
+            # filtreli=False parametresi ile çağrılır (Tüm maçlar)
+            threading.Thread(
+                target=veritabanindan_bulten_getir, 
+                args=(chat_id, False)
+            ).start()
 
     return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
-    # Railway'in dinamik atadığı PORT ortam değişkenini okur, yoksa 8080 kullanır
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
