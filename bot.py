@@ -34,6 +34,13 @@ def gunun_maclarini_cek():
         print("❌ API İstek Hatası:", e)
     return []
 
+    # bot.py içinde rastgele_bulten_tahmin_olustur fonksiyonu içinde,
+    # 'islenmis_maclar' dizisi dolduktan hemen sonra ekleyin:
+
+    # Maçları başlama saatine göre sırala (saatlerin sabit ve düzenli gelmesi için)
+    islenmis_maclar.sort(key=lambda x: x.get("saat", "23:59"))
+
+
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_gorunum = su_an_tsi.strftime("%Y-%m-%d")
