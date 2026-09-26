@@ -2,16 +2,15 @@ import sqlite3
 
 def get_db_connection():
     try:
-        # SQLite proje dizininde maclar.db adında bir dosya oluşturur
         conn = sqlite3.connect("maclar.db")
-        conn.row_factory = sqlite3.Row  # Verileri sözlük gibi okumayı sağlar
+        conn.row_factory = sqlite3.Row  # Sözlük yapısında okuma sağlar
         return conn
     except Exception as e:
         print(f"❌ SQLite Bağlantı Hatası: {e}")
         return None
 
 def init_db():
-    """Veritabanı tablosu yoksa otomatik oluşturur."""
+    """Veritabanını ve gerekli tabloları oluşturur."""
     conn = get_db_connection()
     if conn:
         try:
@@ -23,7 +22,9 @@ def init_db():
                     ev_sahibi TEXT,
                     deplasman TEXT,
                     lig TEXT,
-                    tahmin TEXT
+                    tahmin TEXT,
+                    ev_skor INTEGER DEFAULT -1,
+                    dep_skor INTEGER DEFAULT -1
                 )
             """)
             conn.commit()
@@ -32,5 +33,5 @@ def init_db():
         finally:
             conn.close()
 
-# Uygulama başladığında veritabanını ve tabloyu hazırla
+# Uygulama başlarken tabloyu hazırla
 init_db()
