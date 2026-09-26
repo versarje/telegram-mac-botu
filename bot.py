@@ -120,7 +120,7 @@ def get_paginated_matches_message(page=0, page_size=5):
     if not maclar:
         return "📊 Veritabanında gösterilecek maç bulunamadı.", None
 
-    mesaj = f"⚽ <b>BÜLTEN VE TAHMİNLER (Sayfa {page+1}/{total_pages})</b>\n\n"
+    mesaj = f"⚽ <b>BÜLTEN VE SKORLAR (Sayfa {page+1}/{total_pages})</b>\n\n"
     for m in maclar:
         ev = m.get("ev_sahibi", "")
         dep = m.get("deplasman", "")
@@ -130,10 +130,9 @@ def get_paginated_matches_message(page=0, page_size=5):
         ev_s = m.get("ev_skor")
         dep_s = m.get("dep_skor")
         
-        skor_str = f" ({ev_s}-{dep_s})" if ev_s is not None and dep_s is not None else ""
-        mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev}{skor_str} vs {dep}{skor_str}\n💡 Tahmin: <b>{tahmin}</b>\n-------------------\n"
+        skor_str = f" <b>[{ev_s} - {dep_s}]</b>" if ev_s is not None and dep_s is not None else " (Oynanmadı)"
+        mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev} vs {dep}{skor_str}\n💡 Tahmin: <b>{tahmin}</b>\n-------------------\n"
 
-    # Butonlar
     keyboard = {"inline_keyboard": []}
     row = []
     if page > 0:
@@ -147,7 +146,6 @@ def get_paginated_matches_message(page=0, page_size=5):
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
-    
     if not dt_obj:
         dt_obj = get_turkey_now()
     
@@ -158,16 +156,11 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
-    
     url = f"{config.BASE_URL}/football-get-matches-by-date?date={api_date_str}"
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
-        
-        matches = []
-        if res.status_code == 200:
-            res_json = res.json()
-            matches = api_yanitindan_maclari_ayikla(res_json)
+        matches = api_yanitindan_maclari_ayikla(res.json()) if res.status_code == 200 else []
 
         if not matches:
             telegram_post(f"⚠️ {gorunur_tarih} tarihi için API'den maç gelmedi.", chat_id)
@@ -177,60 +170,31 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         mevcut_set = {(m['ev_sahibi'], m['deplasman']) for m in mevcut_maclar_raw}
 
         yeni_eklenen = 0
-        guncellenen = 0
-
         for m in matches:
             if not isinstance(m, dict):
                 continue
-
             home_obj = m.get("home", {})
             away_obj = m.get("away", {})
             
-            raw_ev = metin_veya_sozlukten_al(home_obj, "name") or metin_veya_sozlukten_al(home_obj, "longName") or "Ev Sahibi"
-            raw_dep = metin_veya_sozlukten_al(away_obj, "name") or metin_veya_sozlukten_al(away_obj, "longName") or "Deplasman"
-            
-            ev = turkcelestir(raw_ev, tur="takim")
-            dep = turkcelestir(raw_dep, tur="takim")
+            ev = turkcelestir(metin_veya_sozlukten_al(home_obj, "name"), "takim")
+            dep = turkcelestir(metin_veya_sozlukten_al(away_obj, "name"), "takim")
 
             if not ev or not dep:
                 continue
 
-            time_str = m.get("time")
-            time_ts = m.get("timeTS")
-            saat = timestamp_saate_cevir(time_ts, time_str)
+            saat = timestamp_saate_cevir(m.get("timeTS"), m.get("time"))
+            lig = turkcelestir(metin_veya_sozlukten_al(m.get("tournament", {}), "name") or "Futbol", "lig")
 
-            tournament_obj = m.get("tournament", {})
-            league_obj = m.get("league", {})
-            raw_lig = (
-                metin_veya_sozlukten_al(tournament_obj, "name") or 
-                metin_veya_sozlukten_al(league_obj, "name") or 
-                m.get("leagueName") or 
-                "Futbol"
-            )
-            lig = turkcelestir(raw_lig, tur="lig")
-
-            ev_skor = home_obj.get("score") if isinstance(home_obj, dict) else None
-            dep_skor = away_obj.get("score") if isinstance(away_obj, dict) else None
-
-            if (ev, dep) in mevcut_set:
-                if ev_skor is not None and dep_skor is not None:
-                    execute_d1(
-                        "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
-                        [ev_skor, dep_skor, ev, dep]
-                    )
-                    guncellenen += 1
-            else:
+            if (ev, dep) not in mevcut_set:
                 tahmin = rastgele_tahmin_uret()
                 execute_d1(
-                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin, ev_skor, dep_skor) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [saat, ev, dep, lig, tahmin, ev_skor, dep_skor]
+                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
+                    [saat, ev, dep, lig, tahmin]
                 )
                 mevcut_set.add((ev, dep))
                 yeni_eklenen += 1
 
-        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteni işlendi:\n➕ <b>{yeni_eklenen}</b> yeni maç eklendi.\n🔄 <b>{guncellenen}</b> maçın skoru güncellendi.", chat_id)
-        
-        # Yükleme bittikten sonra ilk sayfayı butonlarla kullanıcıya göster
+        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteni yüklendi: ➕ <b>{yeni_eklenen}</b> yeni maç eklendi.", chat_id)
         msg, markup = get_paginated_matches_message(0)
         telegram_post(msg, chat_id, markup)
 
@@ -241,7 +205,39 @@ def yarin_bultenini_yukle(chat_id=None):
     yarin_tr = get_turkey_now() + timedelta(days=1)
     bulteni_apiden_veritabanina_yukle(chat_id=chat_id, dt_obj=yarin_tr)
 
-def biten_maclari_getir(chat_id=None):
-    # Skorlar ve bülten artık sayfalama fonksiyonu üzerinden yönetiliyor
+def canli_skorlari_guncelle_ve_getir(chat_id=None):
+    init_d1_db()
+    api_date_str = get_turkey_now().strftime("%Y%m%d")
+
+    headers = {
+        "x-rapidapi-key": config.RAPIDAPI_KEY,
+        "x-rapidapi-host": config.RAPIDAPI_HOST
+    }
+    url = f"{config.BASE_URL}/football-get-livescores-by-date?date={api_date_str}"
+
+    try:
+        res = requests.get(url, headers=headers, timeout=25)
+        if res.status_code == 200:
+            matches = api_yanitindan_maclari_ayikla(res.json())
+            guncellenen = 0
+            for m in matches:
+                home_obj = m.get("home", {})
+                away_obj = m.get("away", {})
+                ev = turkcelestir(metin_veya_sozlukten_al(home_obj, "name"), "takim")
+                dep = turkcelestir(metin_veya_sozlukten_al(away_obj, "name"), "takim")
+                
+                ev_skor = home_obj.get("score")
+                dep_skor = away_obj.get("score")
+
+                if ev_skor is not None and dep_skor is not None:
+                    execute_d1(
+                        "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
+                        [ev_skor, dep_skor, ev, dep]
+                    )
+                    guncellenen += 1
+            print(f"Livescores güncellendi: {guncellenen} maç işlendi.")
+    except Exception as e:
+        print(f"Livescores API hata: {e}")
+
     msg, markup = get_paginated_matches_message(0)
     telegram_post(msg, chat_id, markup)
