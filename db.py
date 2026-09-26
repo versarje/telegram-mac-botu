@@ -1,37 +1,49 @@
-import sqlite3
+import requests
+import config
 
-def get_db_connection():
+D1_URL = f"https://api.cloudflare.com/client/v4/accounts/{config.CLOUDFLARE_ACCOUNT_ID}/d1/database/{config.CLOUDFLARE_DATABASE_ID}/query"
+
+HEADERS = {
+    "Authorization": f"Bearer {config.CLOUDFLARE_API_TOKEN}",
+    "Content-Type": "application/json"
+}
+
+def execute_d1(sql, params=None):
+    """Cloudflare D1 SQL sorgularını REST API üzerinden çalıştırır."""
+    payload = {
+        "sql": sql,
+        "params": params or []
+    }
+    
     try:
-        conn = sqlite3.connect("maclar.db")
-        conn.row_factory = sqlite3.Row  # Sözlük yapısında okuma sağlar
-        return conn
+        response = requests.post(D1_URL, headers=HEADERS, json=payload, timeout=15)
+        res_json = response.json()
+        
+        if res_json.get("success"):
+            result_data = res_json.get("result", [])
+            if result_data and len(result_data) > 0:
+                results = result_data[0].get("results", [])
+                return results
+            return []
+        else:
+            print(f"❌ D1 Hata: {res_json.get('errors')}")
+            return None
     except Exception as e:
-        print(f"❌ SQLite Bağlantı Hatası: {e}")
+        print(f"❌ D1 Bağlantı Hatası: {e}")
         return None
 
-def init_db():
-    """Veritabanını ve gerekli tabloları oluşturur."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS maclar (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    saat TEXT,
-                    ev_sahibi TEXT,
-                    deplasman TEXT,
-                    lig TEXT,
-                    tahmin TEXT,
-                    ev_skor INTEGER DEFAULT -1,
-                    dep_skor INTEGER DEFAULT -1
-                )
-            """)
-            conn.commit()
-        except Exception as e:
-            print(f"❌ Tablo Oluşturma Hatası: {e}")
-        finally:
-            conn.close()
-
-# Uygulama başlarken tabloyu hazırla
-init_db()
+def init_d1_db():
+    """D1 üzerinde maclar tablosunu oluşturur."""
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS maclar (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        saat TEXT,
+        ev_sahibi TEXT,
+        deplasman TEXT,
+        lig TEXT,
+        tahmin TEXT,
+        ev_skor INTEGER DEFAULT NULL,
+        dep_skor INTEGER DEFAULT NULL
+    );
+    """
+    execute_d1(create_table_sql)
