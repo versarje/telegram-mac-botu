@@ -141,6 +141,10 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             telegram_post(f"⚽ API'de bugün için maç bulunamadı.{kota_mesaji}", chat_id)
             return
 
+        # MEVCUT MAÇLARI HIZLICA TEK SORGUDA HAFIZAYA ÇEKİYORUZ (Perf. Optimizasyonu)
+        mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
+        mevcut_set = {(m['ev_sahibi'], m['deplasman']) for m in mevcut_maclar_raw}
+
         yeni_eklenen = 0
 
         for m in events:
@@ -152,8 +156,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            check_res = execute_d1("SELECT id FROM maclar WHERE ev_sahibi = ? AND deplasman = ?", [ev, dep])
-            if check_res is not None and len(check_res) > 0:
+            if (ev, dep) in mevcut_set:
                 continue
 
             startTimestamp = m.get("startTimestamp") or m.get("startTime") or m.get("time")
@@ -166,6 +169,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
             sql = "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)"
             execute_d1(sql, [saat, ev, dep, lig, tahmin])
+            
+            mevcut_set.add((ev, dep))
             yeni_eklenen += 1
 
         kota_bilgisi_str = f"\n💳 <b>Kalan API Kullanım Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
@@ -224,26 +229,28 @@ def biten_maclari_getir(chat_id=None):
             telegram_post("⏰ Henüz sonuçlanmış bir maç bulunamadı.", chat_id)
             return
 
-        mesaj_satirlari = [
-            "🏆 <b>BİTEN MAÇLAR VE TAHMİN SONUÇLARI</b>",
-            "-----------------------------------------"
-        ]
-
+        mesaj_blok = "🏆 <b>BİTEN MAÇLAR VE TAHMİN SONUÇLARI</b>\n-----------------------------------------\n"
         tutan_sayisi = 0
+
         for m in bitenler:
             durum = tahmin_kontrol_et(m['tahmin'], m['ev_skor'], m['dep_skor'])
             if "✅" in durum:
                 tutan_sayisi += 1
 
-            mesaj_satirlari.append(
+            satir = (
                 f"⏰ <b>{m['saat']}</b> | ⚔️ <b>{m['ev_sahibi']} {m['ev_skor']} - {m['dep_skor']} {m['deplasman']}</b>\n"
-                f"🎯 Tahmin: <b>{m['tahmin']}</b> -> <b>{durum}</b>\n"
+                f"🎯 Tahmin: <b>{m['tahmin']}</b> -> <b>{durum}</b>\n\n"
             )
 
-        mesaj_satirlari.append("-----------------------------------------")
-        mesaj_satirlari.append(f"📊 <b>Başarı Oranı: {tutan_sayisi} / {len(bitenler)} Maç Tuttu!</b>")
+            # Telegram 4096 karakter sınırına takılmamak için parçalı gönderim
+            if len(mesaj_blok) + len(satir) > 3800:
+                telegram_post(mesaj_blok, chat_id)
+                mesaj_blok = ""
 
-        telegram_post("\n".join(mesaj_satirlari), chat_id)
+            mesaj_blok += satir
+
+        mesaj_blok += f"-----------------------------------------\n📊 <b>Başarı Oranı: {tutan_sayisi} / {len(bitenler)} Maç Tuttu!</b>"
+        telegram_post(mesaj_blok, chat_id)
 
     except Exception as e:
         telegram_post(f"❌ Sonuç getirme hatası: {e}", chat_id)
