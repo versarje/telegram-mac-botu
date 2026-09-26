@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ KONFİGÜRASYONLAR (YENİ API & TELEGRAM)
+# ⚙️ KONFİGÜRASYONLAR (RAPIDAPI & TELEGRAM)
 # ==========================================
 RAPIDAPI_KEY = "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a"
 RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
@@ -81,22 +81,30 @@ def api_request(endpoint, params=None):
         print("❌ API İstek Hatası:", e)
         return None
 
-def gunun_maclarini_cek(tarih_str):
-    # Free API Live Football Data - Get Matches/Events by Date uç noktası
-    # Alternatif path düzenlemeleriyle veri çekimi garanti altına alınır
-    endpoints = ["football-get-matches-by-date", "get-matches-by-date", "matches/by-date"]
+def gunun_maclarini_cek():
+    # TSI (Türkiye Saati) ile O GÜNÜN tarihini dinamik üretir (YYYYMMDD)
+    su_an_tsi = datetime.utcnow() + timedelta(hours=3)
+    formatli_tarih = su_an_tsi.strftime("%Y%m%d")
     
-    for ep in endpoints:
-        res = api_request(ep, {"date": tarih_str})
-        if res:
-            if "response" in res and isinstance(res["response"], list):
-                return res["response"]
-            elif "events" in res:
-                return res["events"]
-            elif "data" in res:
-                return res["data"]
-            elif isinstance(res, list):
-                return res
+    endpoint = "football-get-matches-by-date"
+    res = api_request(endpoint, {"date": formatli_tarih})
+    
+    if not res:
+        return []
+        
+    # API'den dönen veri yapısını yakalama
+    if isinstance(res, dict):
+        if "response" in res and isinstance(res["response"], list):
+            return res["response"]
+        elif "status" in res and res["status"] == "success":
+            data = res.get("response", res.get("data", {}))
+            if isinstance(data, list): return data
+            if isinstance(data, dict): return data.get("matches", data.get("events", []))
+        elif "events" in res:
+            return res["events"]
+    elif isinstance(res, list):
+        return res
+
     return []
 
 # ==========================================
@@ -104,27 +112,28 @@ def gunun_maclarini_cek(tarih_str):
 # ==========================================
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
-    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
+    tarih_gorunum = su_an_tsi.strftime("%Y-%m-%d")
 
     telegram_post("🔄 <b>Günün futbol bülteni çekiliyor...</b>", chat_id)
 
-    events = gunun_maclarini_cek(tarih_str)
+    events = gunun_maclarini_cek()
     
     if not events:
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API bağlantısı kurulamadı.", chat_id)
         return
 
-    # Başlamamış maçları süz (NS, Not Started, veya notstarted)
+    # Başlamamış maçları süz
     gelecek_maclar = []
     for m in events:
         status = str(m.get("status", {}).get("type", m.get("status", ""))).lower()
-        if status in ["notstarted", "ns", "scheduled", "0"]:
+        if status in ["notstarted", "ns", "scheduled", "0", "not started"]:
             gelecek_maclar.append(m)
 
     if not gelecek_maclar:
         telegram_post("📅 Bugün oynanacak başlamamış maç kalmadı.", chat_id)
         return
 
+    # Otomatik Tahmin Havuzu
     TAHMIN_HAVUZU = [
         ("⚽ 2.5 ÜST", "UST25"),
         ("🛡️ 2.5 ALT", "ALT25"),
@@ -134,7 +143,7 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     db_veri = db_oku()
 
     mesaj_satirlari = [
-        f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLER ({tarih_str})</b>",
+        f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLER ({tarih_gorunum})</b>",
         "-----------------------------------------"
     ]
 
@@ -151,8 +160,10 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         else:
             saat_tsi = str(m.get("time", "--:--"))
 
+        # Rastgele Tahmin Seçimi
         secilen_tahmin_metin, secilen_tahmin_tur = random.choice(TAHMIN_HAVUZU)
 
+        # Veritabanına kaydet
         db_veri["tahminler"][fid] = {
             "mac": f"{ev} vs {dep}",
             "lig": lig,
@@ -173,22 +184,23 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     db_yaz(db_veri)
 
     mesaj_satirlari.append("-----------------------------------------")
-    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazarak durumlarını görebilirsiniz.</i>")
+    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç veritabanına kaydedildi. Maçlar bitince /sonuc yazarak durumlarını kontrol edebilirsiniz.</i>")
 
     telegram_post("\n".join(mesaj_satirlari), chat_id)
 
 # ==========================================
-# 3. SONUÇ RAPORU (/sonuc)
+# 3. SONUÇ RAPORU VE KONTROL (/sonuc)
 # ==========================================
 def ayrintili_mac_sonuclarini_getir(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
-    tarih_str = su_an_tsi.strftime("%Y-%m-%d")
+    tarih_gorunum = su_an_tsi.strftime("%Y-%m-%d")
 
-    events = gunun_maclarini_cek(tarih_str)
+    events = gunun_maclarini_cek()
     if not events:
         telegram_post("🏁 Maç sonuçları taranırken API verisi alınamadı.", chat_id)
         return
 
+    # Biten maçları listele
     biten_maclar = {}
     for m in events:
         fid = str(m.get("id", m.get("match_id", "")))
@@ -248,7 +260,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
         else:
             bekleyenler.append(f"⏳ <b>{t['mac']}</b> - <i>{t['tahmin']}</i>")
 
-    rapor = [f"📊 <b>GÜNÜN TAHMİN SONUÇ RAPORU ({tarih_str})</b>\n"]
+    rapor = [f"📊 <b>GÜNÜN TAHMİN SONUÇ RAPORU ({tarih_gorunum})</b>\n"]
 
     if tutanlar:
         rapor.append("✅ <b>TUTAN TAHMİNLER</b>")
@@ -275,7 +287,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     telegram_post("\n".join(rapor), chat_id)
 
 # ==========================================
-# 4. WEBHOOK & LİSTEN
+# 4. WEBHOOK & DINLEME
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
