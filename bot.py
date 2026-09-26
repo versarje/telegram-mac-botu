@@ -30,7 +30,7 @@ def telegram_post(text, chat_id=None):
 
 def metin_veya_sozlukten_al(veri, anahtar="name"):
     if isinstance(veri, dict):
-        return veri.get(anahtar, "") or veri.get("shortName", "") or veri.get("nameCode", "")
+        return veri.get(anahtar, "") or veri.get("shortName", "") or veri.get("longName", "")
     elif isinstance(veri, str):
         return veri
     return ""
@@ -46,15 +46,16 @@ def turkcelestir(metin, tur="takim"):
         metin = metin.replace(k, v)
     return metin.strip()
 
-def timestamp_saate_cevir(ts):
+def timestamp_saate_cevir(ts, time_str=None):
+    if time_str and ":" in str(time_str):
+        # Örn: "27.09.2026 18:00" -> "18:00"
+        parcalar = str(time_str).split()
+        if len(parcalar) >= 2 and ":" in parcalar[1]:
+            return parcalar[1][:5]
+            
     if not ts:
         return "00:00"
     try:
-        if isinstance(ts, str) and ":" in ts:
-            parcalar = ts.split(":")
-            if len(parcalar) >= 2:
-                return f"{parcalar[0].zfill(2)}:{parcalar[1].zfill(2)}"
-
         ts_int = int(ts)
         if ts_int > 100000000000:
             ts_int = ts_int // 1000
@@ -97,27 +98,20 @@ def tahmin_kontrol_et(tahmin, ev_skor, dep_skor):
 
 def api_yanitindan_maclari_ayikla(data):
     if not isinstance(data, dict):
-        if isinstance(data, list):
-            return data
         return []
     
+    # API yapısı: response -> matches dizisi
     response_obj = data.get("response", {})
     if isinstance(response_obj, dict):
-        events = response_obj.get("events", [])
-        if isinstance(events, list):
-            return events
-    elif isinstance(response_obj, list):
-        return response_obj
-
-    events_direct = data.get("events", [])
-    if isinstance(events_direct, list):
-        return events_direct
+        matches = response_obj.get("matches", [])
+        if isinstance(matches, list):
+            return matches
+            
+    matches_direct = data.get("matches", [])
+    if isinstance(matches_direct, list):
+        return matches_direct
 
     return []
-
-# ==========================================
-# DETAYLI DEBUG DESTEKLİ BÜLTEN ÇEKME
-# ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
@@ -138,28 +132,13 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     try:
         res = requests.get(url, headers=headers, timeout=25)
         
-        status_code = res.status_code
-        raw_text = res.text[:600]
-        
-        events = []
-        if status_code == 200:
-            try:
-                res_json = res.json()
-                events = api_yanitindan_maclari_ayikla(res_json)
-            except Exception as parse_err:
-                raw_text = f"JSON Parse Hatası: {parse_err}\nMetin: {raw_text}"
+        matches = []
+        if res.status_code == 200:
+            res_json = res.json()
+            matches = api_yanitindan_maclari_ayikla(res_json)
 
-        # TELEGRAM'A DETAYLI HATA VE YANIT BİLGİSİ GÖNDER
-        debug_msg = (
-            f"🔍 <b>DEBUG RAPORU ({gorunur_tarih})</b>\n"
-            f"📍 <b>Atılan URL:</b> <code>{url}</code>\n"
-            f"📊 <b>HTTP Kodu:</b> {status_code}\n"
-            f"⚽ <b>Ayıklanan Maç Sayısı:</b> {len(events)}\n\n"
-            f"📝 <b>Gelen Yanıt (İlk 600 Karakter):</b>\n<code>{raw_text}</code>"
-        )
-        telegram_post(debug_msg, chat_id)
-
-        if not events:
+        if not matches:
+            telegram_post(f"⚠️ {gorunur_tarih} tarihi için maç bulunamadı veya API yanıtı boş.", chat_id)
             return
 
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
@@ -167,27 +146,37 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
         yeni_eklenen = 0
 
-        for m in events:
+        for m in matches:
             if not isinstance(m, dict):
                 continue
 
-            home_obj = m.get("homeTeam", {})
-            away_obj = m.get("awayTeam", {})
+            # API Yeni Obje Yapısı: home -> name / longName
+            home_obj = m.get("home", {})
+            away_obj = m.get("away", {})
             
-            raw_ev = metin_veya_sozlukten_al(home_obj, "name") or m.get("homeTeamName") or "Ev Sahibi"
-            raw_dep = metin_veya_sozlukten_al(away_obj, "name") or m.get("awayTeamName") or "Deplasman"
+            raw_ev = metin_veya_sozlukten_al(home_obj, "name") or metin_veya_sozlukten_al(home_obj, "longName") or "Ev Sahibi"
+            raw_dep = metin_veya_sozlukten_al(away_obj, "name") or metin_veya_sozlukten_al(away_obj, "longName") or "Deplasman"
             
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            if (ev, dep) in mevcut_set:
+            if not ev or not dep or (ev, dep) in mevcut_set:
                 continue
 
-            startTimestamp = m.get("startTimestamp") or m.get("startTime") or m.get("time") or m.get("date")
-            saat = timestamp_saate_cevir(startTimestamp)
+            # Saat bilgisini timeTS veya time stringinden alma
+            time_str = m.get("time")
+            time_ts = m.get("timeTS")
+            saat = timestamp_saate_cevir(time_ts, time_str)
 
+            # Lig Bilgisi
             tournament_obj = m.get("tournament", {})
-            raw_lig = metin_veya_sozlukten_al(tournament_obj, "name") or m.get("leagueName") or "Futbol"
+            league_obj = m.get("league", {})
+            raw_lig = (
+                metin_veya_sozlukten_al(tournament_obj, "name") or 
+                metin_veya_sozlukten_al(league_obj, "name") or 
+                m.get("leagueName") or 
+                "Futbol"
+            )
             lig = turkcelestir(raw_lig, tur="lig")
 
             tahmin = rastgele_tahmin_uret()
@@ -198,7 +187,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             mevcut_set.add((ev, dep))
             yeni_eklenen += 1
 
-        telegram_post(f"✅ Veritabanına <b>{yeni_eklenen}</b> yeni maç başarıyla eklendi!", chat_id)
+        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteninden <b>{yeni_eklenen}</b> yeni maç veritabanına yüklendi!", chat_id)
 
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
