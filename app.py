@@ -90,16 +90,15 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
 
     telegram_post("🔄 <b>Sofascore üzerinden günün bülteni çekiliyor...</b>", chat_id)
 
-    # Sofascore günün maçları uç noktası
-    res_data = api_request("events/get-by-date", {"date": tarih_str, "sport": "football"})
+    # Tas'hih: endpoint 'events/list-by-date'
+    res_data = api_request("events/list-by-date", {"date": tarih_str, "sport": "football"})
     
-    if not res_data or "events" not in res_data:
+    if not res_data or ("events" not in res_data and "data" not in res_data):
         telegram_post("📅 Bugün için Sofascore üzerinde maç bulunamadı veya API hatası alındı.", chat_id)
         return
 
-    events = res_data.get("events", [])
+    events = res_data.get("events", res_data.get("data", []))
     
-    # Henüz başlamamış maçlar (status.type == 'notstarted')
     gelecek_maclar = [m for m in events if m.get("status", {}).get("type") == "notstarted"]
 
     if not gelecek_maclar:
@@ -120,7 +119,7 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     ]
 
     islenen_mac_sayisi = 0
-    for m in gelecek_maclar[:15]:  # Mesaj uzunluk sınırı için ilk 15 maç
+    for m in gelecek_maclar[:15]:
         fid = str(m.get("id"))
         lig = m.get("tournament", {}).get("name", "Futbol")
         ev = m.get("homeTeam", {}).get("name", "Ev")
@@ -165,12 +164,13 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("events/get-by-date", {"date": tarih_str, "sport": "football"})
-    if not res_data or "events" not in res_data:
+    # Tas'hih: endpoint 'events/list-by-date'
+    res_data = api_request("events/list-by-date", {"date": tarih_str, "sport": "football"})
+    if not res_data or ("events" not in res_data and "data" not in res_data):
         telegram_post("🏁 Maç sonuçları taranırken API verisi alınamadı.", chat_id)
         return
 
-    events = res_data.get("events", [])
+    events = res_data.get("events", res_data.get("data", []))
     biten_maclar = {str(m["id"]): m for m in events if m.get("status", {}).get("type") == "finished"}
 
     db_veri = db_oku()
