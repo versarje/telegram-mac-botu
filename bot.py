@@ -96,14 +96,11 @@ def tahmin_kontrol_et(tahmin, ev_skor, dep_skor):
     return "❓ Belirsiz"
 
 def api_yanitindan_maclari_ayikla(data):
-    """
-    RapidAPI free-api-live-football-data JSON Şeması:
-    data -> response -> events -> [liste]
-    """
     if not isinstance(data, dict):
+        if isinstance(data, list):
+            return data
         return []
     
-    # Sofascore endpoint yapısına tam uyum
     response_obj = data.get("response", {})
     if isinstance(response_obj, dict):
         events = response_obj.get("events", [])
@@ -112,7 +109,6 @@ def api_yanitindan_maclari_ayikla(data):
     elif isinstance(response_obj, list):
         return response_obj
 
-    # Yedek doğrudan arama
     events_direct = data.get("events", [])
     if isinstance(events_direct, list):
         return events_direct
@@ -123,21 +119,24 @@ def api_yanitindan_maclari_ayikla(data):
 # 1. BÜLTENİ APİ'DEN ÇEKİP D1'E EKLE
 # ==========================================
 
-def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
+def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
     
-    if not tarih_str:
-        now_tr = get_turkey_now()
-        tarih_str = now_tr.strftime("%Y-%m-%d")
+    if not dt_obj:
+        dt_obj = get_turkey_now()
     
-    telegram_post(f"🔄 <b>{tarih_str} bülteni API'den çekiliyor...</b>", chat_id)
+    # RapidAPI parametresi: YYYYMMDD (Örn: 20241107)
+    api_date_str = dt_obj.strftime("%Y%m%d")
+    gorunur_tarih = dt_obj.strftime("%Y-%m-%d")
+    
+    telegram_post(f"🔄 <b>{gorunur_tarih} bülteni API'den çekiliyor...</b>", chat_id)
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
     
-    url = f"{config.BASE_URL}/football-get-matches-by-date?date={tarih_str}"
+    url = f"{config.BASE_URL}/football-get-matches-by-date?date={api_date_str}"
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
@@ -147,11 +146,15 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
         
         events = []
         if res.status_code == 200:
-            events = api_yanitindan_maclari_ayikla(res.json())
+            res_json = res.json()
+            events = api_yanitindan_maclari_ayikla(res_json)
+        else:
+            telegram_post(f"⚠️ API İsteği Başarısız! Status Code: {res.status_code}\n{res.text[:200]}", chat_id)
+            return
 
         if not events:
             kota_mesaji = f"\n\n📊 <b>Kalan API Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
-            telegram_post(f"⚽ API'de {tarih_str} tarihi için maç bulunamadı.{kota_mesaji}", chat_id)
+            telegram_post(f"⚽ API'de {gorunur_tarih} tarihi için maç bulunamadı.{kota_mesaji}", chat_id)
             return
 
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
@@ -166,8 +169,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
             home_obj = m.get("homeTeam", {})
             away_obj = m.get("awayTeam", {})
             
-            raw_ev = metin_veya_sozlukten_al(home_obj, "name") or "Ev Sahibi"
-            raw_dep = metin_veya_sozlukten_al(away_obj, "name") or "Deplasman"
+            raw_ev = metin_veya_sozlukten_al(home_obj, "name") or m.get("homeTeamName") or "Ev Sahibi"
+            raw_dep = metin_veya_sozlukten_al(away_obj, "name") or m.get("awayTeamName") or "Deplasman"
             
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
@@ -175,11 +178,11 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
             if (ev, dep) in mevcut_set:
                 continue
 
-            startTimestamp = m.get("startTimestamp") or m.get("startTime") or m.get("time")
+            startTimestamp = m.get("startTimestamp") or m.get("startTime") or m.get("time") or m.get("date")
             saat = timestamp_saate_cevir(startTimestamp)
 
             tournament_obj = m.get("tournament", {})
-            raw_lig = metin_veya_sozlukten_al(tournament_obj, "name") or "Futbol"
+            raw_lig = metin_veya_sozlukten_al(tournament_obj, "name") or m.get("leagueName") or "Futbol"
             lig = turkcelestir(raw_lig, tur="lig")
 
             tahmin = rastgele_tahmin_uret()
@@ -192,7 +195,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
 
         kota_bilgisi_str = f"\n💳 <b>Kalan API Kullanım Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
         telegram_post(
-            f"✅ <b>{tarih_str} Bülteni Güncellendi!</b>\n"
+            f"✅ <b>{gorunur_tarih} Bülteni Güncellendi!</b>\n"
             f"Yeni eklenen: <b>{yeni_eklenen}</b> maç."
             f"{kota_bilgisi_str}", 
             chat_id
@@ -201,12 +204,10 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, tarih_str=None):
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
-
 def yarin_bultenini_yukle(chat_id=None):
-    """Yarının tarihini hesaplayıp bülteni çeker."""
+    """Yarının bültenini çeker."""
     yarin_tr = get_turkey_now() + timedelta(days=1)
-    yarin_tarih_str = yarin_tr.strftime("%Y-%m-%d")
-    bulteni_apiden_veritabanina_yukle(chat_id=chat_id, tarih_str=yarin_tarih_str)
+    bulteni_apiden_veritabanina_yukle(chat_id=chat_id, dt_obj=yarin_tr)
 
 # ==========================================
 # 2. DÜN VE BUGÜNÜN SKORLARINI D1'DE GÜNCELLE VE SKORLARI GETİR
@@ -216,25 +217,28 @@ def biten_maclari_getir(chat_id=None):
     telegram_post("🔄 <b>Dün ve bugünün maç skorları kontrol ediliyor...</b>", chat_id)
 
     now_tr = get_turkey_now()
-    bugun_str = now_tr.strftime("%Y-%m-%d")
-    dun_str = (now_tr - timedelta(days=1)).strftime("%Y-%m-%d")
+    bugun_dt = now_tr
+    dun_dt = now_tr - timedelta(days=1)
     
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
 
-    for tarih_str in [dun_str, bugun_str]:
-        url = f"{config.BASE_URL}/football-get-matches-by-date?date={tarih_str}"
+    for dt_obj in [dun_dt, bugun_dt]:
+        api_date_str = dt_obj.strftime("%Y%m%d")
+        url = f"{config.BASE_URL}/football-get-matches-by-date?date={api_date_str}"
         try:
             res = requests.get(url, headers=headers, timeout=20)
             if res.status_code == 200:
                 events = api_yanitindan_maclari_ayikla(res.json())
                 for m in events:
+                    if not isinstance(m, dict):
+                        continue
                     home_obj = m.get("homeTeam", {})
                     away_obj = m.get("awayTeam", {})
-                    raw_ev = metin_veya_sozlukten_al(home_obj, "name") or "Ev Sahibi"
-                    raw_dep = metin_veya_sozlukten_al(away_obj, "name") or "Deplasman"
+                    raw_ev = metin_veya_sozlukten_al(home_obj, "name") or m.get("homeTeamName") or "Ev Sahibi"
+                    raw_dep = metin_veya_sozlukten_al(away_obj, "name") or m.get("awayTeamName") or "Deplasman"
                     ev = turkcelestir(raw_ev, tur="takim")
                     dep = turkcelestir(raw_dep, tur="takim")
 
@@ -245,7 +249,7 @@ def biten_maclari_getir(chat_id=None):
                         update_sql = "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?"
                         execute_d1(update_sql, [home_score, away_score, ev, dep])
         except Exception as e:
-            print(f"{tarih_str} skor çekme hatası: {e}")
+            print(f"Skor çekme hatası: {e}")
 
     try:
         select_sql = "SELECT saat, ev_sahibi, deplasman, tahmin, ev_skor, dep_skor FROM maclar WHERE ev_skor IS NOT NULL AND ev_skor >= 0 ORDER BY saat ASC"
