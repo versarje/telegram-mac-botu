@@ -152,6 +152,21 @@ def akilli_tahmin_uret(match_id, ev, dep):
     indeks = seed % len(TAHMINLER)
     return TAHMINLER[indeks]
 
+def api_yanitindan_maclari_ayikla(res_json):
+    if isinstance(res_json, dict):
+        # Olası anahtar isimlerini dene
+        for key in ["response", "events", "data", "matches", "results"]:
+            val = res_json.get(key)
+            if isinstance(val, list):
+                return val
+            elif isinstance(val, dict):
+                sub_val = val.get("matches", val.get("events", []))
+                if isinstance(sub_val, list):
+                    return sub_val
+    elif isinstance(res_json, list):
+        return res_json
+    return []
+
 def gunun_maclarini_cek():
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     formatli_tarih = su_an_tsi.strftime("%Y%m%d")
@@ -163,11 +178,7 @@ def gunun_maclarini_cek():
     try:
         res = requests.get(url, headers=headers, params={"date": formatli_tarih}, timeout=20)
         if res.status_code == 200:
-            res_json = res.json()
-            if isinstance(res_json, dict):
-                return res_json.get("response", res_json.get("events", res_json.get("data", [])))
-            elif isinstance(res_json, list):
-                return res_json
+            return api_yanitindan_maclari_ayikla(res.json())
     except Exception as e:
         print("❌ API İstek Hatası:", e)
     return []
@@ -200,11 +211,7 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         toplam_limit = res.headers.get("x-ratelimit-requests-limit", "Bilinmiyor")
 
         if res.status_code == 200:
-            res_json = res.json()
-            if isinstance(res_json, dict):
-                events = res_json.get("response", res_json.get("events", res_json.get("data", [])))
-            elif isinstance(res_json, list):
-                events = res_json
+            events = api_yanitindan_maclari_ayikla(res.json())
     except Exception as e:
         print("❌ API İstek Hatası:", e)
 
@@ -216,6 +223,10 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     islenmis_maclar = []
     
     for i, m in enumerate(events):
+        # m bir dict (sözlük) değilse atla (Hatayı engelleyen kritik kontrol)
+        if not isinstance(m, dict):
+            continue
+
         fid = str(m.get("id", m.get("match_id", m.get("eventId", i))))
         
         raw_lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
@@ -269,6 +280,10 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
             "tahmin_tur": secilen_tahmin_tur,
             "oran_metni": oran_metni
         })
+
+    if not islenmis_maclar:
+        telegram_post("⚠️ Bültendeki maç verileri uygun formatta okunamadı.", chat_id)
+        return
 
     # Kronolojik olarak saate göre sırala (00:00 -> 23:59)
     islenmis_maclar.sort(key=lambda x: x["saat"])
@@ -329,6 +344,9 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
 
     biten_maclar = {}
     for m in events:
+        if not isinstance(m, dict):
+            continue
+
         fid = str(m.get("id", m.get("match_id", m.get("eventId", ""))))
         status_val = m.get("status", {})
         if isinstance(status_val, dict):
