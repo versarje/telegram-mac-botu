@@ -1,6 +1,6 @@
 import os
 
-# API & Telegram
+# RapidAPI & Telegram Konfigürasyonu
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a")
 RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
 BASE_URL = f"https://{RAPIDAPI_HOST}"
@@ -8,11 +8,10 @@ BASE_URL = f"https://{RAPIDAPI_HOST}"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1004461429503")
 
-
 # Cloudflare D1 Ayarları
-CLOUDFLARE_ACCOUNT_ID = "9d67b6866b5fbfb1bb8ae080c0e763e2"
-CLOUDFLARE_DATABASE_ID = "bade913e-de57-4040-8245-f3f81016d8d7"
-CLOUDFLARE_API_TOKEN = "Cfut_odXanZXSbcQEzQ9xGGnv4T5yzrItHMOgh3ix"
+CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "9d67b6866b5fbfb1bb8ae080c0e763e2")
+CLOUDFLARE_DATABASE_ID = os.environ.get("CLOUDFLARE_DATABASE_ID", "bade913e-de57-4040-8245-f3f81016d8d7")
+CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "cfat_rooiWUD7GyxiimnMKUoHAK9k3OkjhI8OPrN3EYa3a623c09b")
 
 # Sözlükler
 LIG_SOZLUK = {
@@ -33,7 +32,7 @@ LIG_SOZLUK = {
 TAKIM_SOZLUK = {
     "Bayern München": "Bayern Münih",
     "Bayern Munich": "Bayern Münih",
-    "Red Star Belgrade": "Kızılıldız",
+    "Red Star Belgrade": "Kızıldıldız",
     "Sporting CP": "Sporting Lizbon",
     "Athletic Club": "Athletic Bilbao",
     "Inter": "Inter Milan",
