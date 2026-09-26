@@ -1,54 +1,40 @@
-from flask import Flask, request, jsonify
+import os
+from flask import Flask, request
 import bot
+from db import init_d1_db
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET"])
-def home():
+@app.route('/', methods=['GET'])
+def index():
     return "Bot Aktif ve Çalışıyor!", 200
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    update = request.get_json(silent=True)
-    if not update:
-        return jsonify({"status": "error"}), 400
+    data = request.get_json(silent=True)
+    if not data or "message" not in data:
+        return "OK", 200
 
-    message = update.get("message") or update.get("edited_message")
-    if not message:
-        return jsonify({"status": "ok"}), 200
-
+    message = data["message"]
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "").strip()
 
-    if not text or not chat_id:
-        return jsonify({"status": "ok"}), 200
-
-    komut = text.split()[0].lower()
-
-    if komut in ["/start", "/yardim"]:
-        mesaj = (
-            "🤖 <b>Futbol Tahmin Botu</b>\n\n"
-            "📌 <b>Komutlar:</b>\n"
-            "▫️ /guncelle - Güncel bülteni API'den çeker.\n"
-            "▫️ /bbb - Günün kalan maçlarını listeler.\n"
-            "▫️ /bbb_all - Tüm maçları listeler.\n"
-            "▫️ /sonuclar - Biten maçların skorlarını ve tahminlerin tutup tutmadığını gösterir."
+    if text in ["/start", "/help"]:
+        bot.telegram_post(
+            "👋 <b>Futbol Tahmin Botuna Hoş Geldiniz!</b>\n\n"
+            "Komutlar:\n"
+            "⚽ <b>/guncelle</b> - Günün maçlarını çeker ve tahminleri veritabanına kaydeder.\n"
+            "🏆 <b>/skorlar</b> - Dün ve bugünün biten maç skorlarını ve tahmin başarı oranını getirir.", 
+            chat_id
         )
-        bot.telegram_post(mesaj, chat_id)
-
-    elif komut in ["/guncelle", "/update"]:
+    elif text == "/guncelle":
         bot.bulteni_apiden_veritabanina_yukle(chat_id)
-
-    elif komut in ["/bbb", "/ototahmin", "/bulten"]:
-        bot.veritabanindan_bulten_getir(chat_id, filtreli=True)
-
-    elif komut in ["/bbb_all", "/hepsi"]:
-        bot.veritabanindan_bulten_getir(chat_id, filtreli=False)
-
-    elif komut in ["/sonuclar", "/skorlar", "/bitenler"]:
+    elif text in ["/skorlar", "/sonuclar"]:
         bot.biten_maclari_getir(chat_id)
 
-    return jsonify({"status": "ok"}), 200
+    return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    init_d1_db()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
