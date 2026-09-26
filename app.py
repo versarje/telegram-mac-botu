@@ -35,11 +35,19 @@ def telegram_webhook():
             ).start()
 
         # 2. Veritabanından çekme komutu
-        elif komut in ["/bbb", "/ototahmin", "/bulten"]:
-            threading.Thread(
-                target=veritabanindan_bulten_getir, 
-                args=(chat_id,)
-            ).start()
+       # app.py içerisindeki ilgili bölüm:
+elif komut in ["/bbb", "/ototahmin", "/bulten"]:
+    threading.Thread(
+        target=veritabanindan_bulten_getir, 
+        args=(chat_id, True)
+    ).start()
+
+elif komut in ["/bbb_all", "/hepsi"]:
+    threading.Thread(
+        target=veritabanindan_bulten_getir, 
+        args=(chat_id, False) # Filtresiz getirir
+    ).start()
+
 
     return jsonify({"status": "ok"}), 200
 
