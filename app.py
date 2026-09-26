@@ -1,5 +1,4 @@
 import os
-import time
 import json
 import random
 import requests
@@ -10,33 +9,23 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ KONFİGÜRASYONLAR & AYARLAR
+# ⚙️ KONFİGÜRASYONLAR & SOFASCORE API
 # ==========================================
-API_KEYS = [
-    "b699d9effa443321a65fd145ec78ede1",  # 1. API Key
+RAPIDAPI_KEY = "A218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a"
+RAPIDAPI_HOST = "sofascore.p.rapidapi.com"
+BASE_URL = "https://sofascore.p.rapidapi.com"
 
-]
-CURRENT_KEY_INDEX = 0
-
-BASE_URL = "https://v3.football.api-sports.io"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-# Yerel Veritabanı Dosyası
 DB_FILE = "database.json"
-
-KOTA_TAKIP = {
-    "bugun_tarih": (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d"),
-    "harcanan_istek": 0,
-    "max_limit": 100 * len(API_KEYS)
-}
 
 # ==========================================
 # 🔄 YEREL VERİTABANI OKUMA VE YAZMA SİSTEMİ
 # ==========================================
 def db_oku():
     if not os.path.exists(DB_FILE):
-        veri = {"tahminler": {}, "bulten": {}}
+        veri = {"tahminler": {}}
         db_yaz(veri)
         return veri
 
@@ -44,24 +33,22 @@ def db_oku():
         with open(DB_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             if "tahminler" not in data: data["tahminler"] = {}
-            if "bulten" not in data: data["bulten"] = {}
             return data
     except Exception as e:
         print("❌ [DB OKUMA HATASI]:", e)
-        return {"tahminler": {}, "bulten": {}}
+        return {"tahminler": {}}
 
 def db_yaz(yeni_veri):
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(yeni_veri, f, ensure_ascii=False, indent=2)
-        print("✅ Yerel database.json başarıyla güncellendi!")
         return True
     except Exception as e:
         print("❌ [DB YAZMA HATASI]:", e)
         return False
 
 # ==========================================
-# 1. YARDIMCI FONKSİYONLAR & API GEÇİŞİ
+# 1. TELEGRAM & API İSTEK FONKSİYONLARI
 # ==========================================
 def telegram_post(metin, chat_id=None):
     target_chat = chat_id if chat_id else TELEGRAM_CHAT_ID
@@ -77,83 +64,48 @@ def telegram_post(metin, chat_id=None):
     except Exception as e:
         print("Telegram gonderme hatasi:", e)
 
-def api_request(endpoint, params=None, chat_id=None):
-    global CURRENT_KEY_INDEX, KOTA_TAKIP
-    bugun = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
-    
-    if KOTA_TAKIP["bugun_tarih"] != bugun:
-        KOTA_TAKIP["bugun_tarih"] = bugun
-        KOTA_TAKIP["harcanan_istek"] = 0
-        CURRENT_KEY_INDEX = 0
-
-    deneme_sayisi = 0
-    toplam_key = len(API_KEYS)
-
-    while deneme_sayisi < toplam_key:
-        active_key = API_KEYS[CURRENT_KEY_INDEX].strip()
-        headers = {
-            "x-apisports-key": active_key,
-            "Accept": "application/json"
-        }
-
-        url = f"{BASE_URL}/{endpoint}"
-        try:
-            res = requests.get(url, params=params, headers=headers, timeout=30)
-            res_json = res.json()
-
-            errors = res_json.get("errors", {})
-
-            is_rate_limit = False
-            if isinstance(errors, dict):
-                if "requests" in errors or "rateLimit" in errors:
-                    is_rate_limit = True
-                elif errors:
-                    print(f"❌ API HATASI (Key {CURRENT_KEY_INDEX + 1}): {errors}")
-
-            if is_rate_limit or res.status_code == 429:
-                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
-                deneme_sayisi += 1
-                continue
-
-            if res_json.get("response") is not None:
-                KOTA_TAKIP["harcanan_istek"] += 1
-                return res_json
-            else:
-                CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
-                deneme_sayisi += 1
-
-        except Exception as e:
-            print(f"❌ [API BAGLANTI HATASI - Key {CURRENT_KEY_INDEX + 1}]:", e)
-            CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % toplam_key
-            deneme_sayisi += 1
-
-    telegram_post("⚠️ <b>TÜM API KEY'LERİN KOTASI DOLDU VEYA HATA ALINDI!</b>", chat_id)
-    return None
+def api_request(endpoint, params=None):
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST
+    }
+    url = f"{BASE_URL}/{endpoint}"
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=20)
+        if res.status_code == 200:
+            return res.json()
+        else:
+            print(f"❌ API Hatası [{res.status_code}]: {res.text}")
+            return None
+    except Exception as e:
+        print("❌ API İstek Hatası:", e)
+        return None
 
 # ==========================================
-# 2. RASTGELE TAHMİNLİ BÜLTEN OLUSTURMA (/bbb)
+# 2. RASTGELE TAHMİNLİ BÜLTEN (/bbb)
 # ==========================================
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    telegram_post("🔄 <b>Günün bülteni çekiliyor ve yapay tahminler oluşturuluyor...</b>", chat_id)
+    telegram_post("🔄 <b>Sofascore üzerinden günün bülteni çekiliyor...</b>", chat_id)
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"}, chat_id=chat_id)
-    if not res_data or not res_data.get("response"):
-        telegram_post("📅 Bugün için bültende maç bulunamadı veya API hatası oluştu.", chat_id)
+    # Sofascore günün maçları uç noktası
+    res_data = api_request("events/get-by-date", {"date": tarih_str, "sport": "football"})
+    
+    if not res_data or "events" not in res_data:
+        telegram_post("📅 Bugün için Sofascore üzerinde maç bulunamadı veya API hatası alındı.", chat_id)
         return
 
-    data = res_data.get("response", [])
-    gelecek_maclar = [m for m in data if m["fixture"]["status"]["short"] == "NS"]
+    events = res_data.get("events", [])
+    
+    # Henüz başlamamış maçlar (status.type == 'notstarted')
+    gelecek_maclar = [m for m in events if m.get("status", {}).get("type") == "notstarted"]
 
     if not gelecek_maclar:
-        telegram_post("📅 Bugün oynanacak başka maç kalmadı.", chat_id)
+        telegram_post("📅 Bugün oynanacak başlamamış maç kalmadı.", chat_id)
         return
 
-    gelecek_maclar.sort(key=lambda m: m["fixture"]["date"])
-
-    # Rastgele Seçilebilecek Tahmin Havuzu
     TAHMIN_HAVUZU = [
         ("⚽ 2.5 ÜST", "UST25"),
         ("🛡️ 2.5 ALT", "ALT25"),
@@ -161,32 +113,27 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     ]
 
     db_veri = db_oku()
-    if "tahminler" not in db_veri: db_veri["tahminler"] = {}
 
     mesaj_satirlari = [
-        f"🎯 <b>GÜNÜN MAÇLARI VE OTOMATİK TAHMİNLER ({tarih_str})</b>",
+        f"🎯 <b>GÜNÜN SOFASCORE MAÇLARI VE TAHMİNLER ({tarih_str})</b>",
         "-----------------------------------------"
     ]
 
     islenen_mac_sayisi = 0
-    for m in gelecek_maclar[:15]:  # Mesaj sınırı için ilk 15 maç
-        fid = str(m["fixture"]["id"])
-        lig = m["league"]["name"]
-        ev = m["teams"]["home"]["name"]
-        dep = m["teams"]["away"]["name"]
+    for m in gelecek_maclar[:15]:  # Mesaj uzunluk sınırı için ilk 15 maç
+        fid = str(m.get("id"))
+        lig = m.get("tournament", {}).get("name", "Futbol")
+        ev = m.get("homeTeam", {}).get("name", "Ev")
+        dep = m.get("awayTeam", {}).get("name", "Deplasman")
 
-        mac_zamani_raw = m["fixture"]["date"]
-        try:
-            dt_utc = datetime.fromisoformat(mac_zamani_raw.replace('Z', '+00:00'))
-            dt_tsi = dt_utc + timedelta(hours=3)
-            saat_tsi = dt_tsi.strftime("%H:%M")
-        except:
-            saat_tsi = mac_zamani_raw[11:16]
+        timestamp = m.get("startTimestamp")
+        if timestamp:
+            saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
+        else:
+            saat_tsi = "--:--"
 
-        # Rastgele tahmin seçimi
         secilen_tahmin_metin, secilen_tahmin_tur = random.choice(TAHMIN_HAVUZU)
 
-        # Veritabanına kaydet
         db_veri["tahminler"][fid] = {
             "mac": f"{ev} vs {dep}",
             "lig": lig,
@@ -207,42 +154,42 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     db_yaz(db_veri)
 
     mesaj_satirlari.append("-----------------------------------------")
-    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç veritabanına kaydedildi. Maçlar bittiğinde /sonuc yazarak tutan/tutmama durumunu görebilirsiniz.</i>")
+    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazarak durumlarını görebilirsiniz.</i>")
 
     telegram_post("\n".join(mesaj_satirlari), chat_id)
 
 # ==========================================
-# 3. AYRI LİSTELİ SONUÇ RAPORU (/sonuc)
+# 3. SONUÇ RAPORU (/sonuc)
 # ==========================================
 def ayrintili_mac_sonuclarini_getir(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     tarih_str = su_an_tsi.strftime("%Y-%m-%d")
 
-    res_data = api_request("fixtures", {"date": tarih_str, "timezone": "Europe/Istanbul"}, chat_id=chat_id)
-    if not res_data or not res_data.get("response"):
-        telegram_post("🏁 Biten maçlar taranırken API verisi alınamadı.", chat_id)
+    res_data = api_request("events/get-by-date", {"date": tarih_str, "sport": "football"})
+    if not res_data or "events" not in res_data:
+        telegram_post("🏁 Maç sonuçları taranırken API verisi alınamadı.", chat_id)
         return
 
-    data = res_data.get("response", [])
-    biten_maclar = {str(m["fixture"]["id"]): m for m in data if m["fixture"]["status"]["short"] in ['FT', 'AET', 'PEN']}
+    events = res_data.get("events", [])
+    biten_maclar = {str(m["id"]): m for m in events if m.get("status", {}).get("type") == "finished"}
 
     db_veri = db_oku()
     tahminler = db_veri.get("tahminler", {})
 
     if not tahminler:
-        telegram_post("📊 Henüz veritabanında takip edilen bir maç yok.", chat_id)
+        telegram_post("📊 Henüz kaydedilmiş takip edilen bir maç yok.", chat_id)
         return
 
     degisiklik_var_mi = False
 
-    # Maç sonuçlarını güncelle
     for fid, t_data in tahminler.items():
         if fid in biten_maclar and t_data["durum"] == "⏳ BEKLENİYOR":
             m = biten_maclar[fid]
-            ev_gol = m["goals"]["home"] if m["goals"]["home"] is not None else 0
-            dep_gol = m["goals"]["away"] if m["goals"]["away"] is not None else 0
-            toplam_gol = ev_gol + dep_gol
-            kg_var = (ev_gol > 0 and dep_gol > 0)
+            home_score = m.get("homeScore", {}).get("current", 0)
+            away_score = m.get("awayScore", {}).get("current", 0)
+            
+            toplam_gol = home_score + away_score
+            kg_var = (home_score > 0 and away_score > 0)
 
             tur = t_data["tur"]
             tuttu = False
@@ -251,14 +198,13 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
             elif tur == "ALT25" and toplam_gol < 3: tuttu = True
             elif tur == "KG_VAR" and kg_var: tuttu = True
 
-            t_data["skor"] = f"{ev_gol}-{dep_gol}"
+            t_data["skor"] = f"{home_score}-{away_score}"
             t_data["durum"] = "✅ TUTTU" if tuttu else "❌ GELMEDİ"
             degisiklik_var_mi = True
 
     if degisiklik_var_mi:
         db_yaz(db_veri)
 
-    # Tutan ve Tutmayanları Ayrıştır
     tutanlar = []
     yatanlar = []
     bekleyenler = []
@@ -272,7 +218,6 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
         else:
             bekleyenler.append(f"⏳ <b>{t['mac']}</b> - <i>{t['tahmin']}</i>")
 
-    # Rapor Mesajını Oluştur
     rapor = [f"📊 <b>GÜNÜN TAHMİN SONUÇ RAPORU ({tarih_str})</b>\n"]
 
     if tutanlar:
@@ -288,7 +233,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
         rapor.append("")
 
     if bekleyenler:
-        rapor.append("⏳ <b>HENÜZ BİTMEYEN / BEKLEYEN MAÇLAR</b>")
+        rapor.append("⏳ <b>HENÜZ BİTMEYEN MAÇLAR</b>")
         rapor.append("-----------------------------------------")
         rapor.extend(bekleyenler[:5])
         rapor.append("")
@@ -300,7 +245,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     telegram_post("\n".join(rapor), chat_id)
 
 # ==========================================
-# 4. FLASK WEBHOOK & KOMUT DİNLENMESİ
+# 4. WEBHOOK & DINLEME
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
@@ -313,7 +258,6 @@ def telegram_webhook():
         parcalar = text.split()
         komut = parcalar[0].lower() if parcalar else ""
 
-        # YENİ KOMUT: /bbb
         if komut in ["/bbb", "/ototahmin"]:
             threading.Thread(target=rastgele_bulten_tahmin_olustur, args=(chat_id,)).start()
 
