@@ -126,7 +126,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             if not isinstance(m, dict):
                 continue
 
-            match_api_id = str(m.get("id", ""))
             home_obj = m.get("home", {})
             away_obj = m.get("away", {})
             
@@ -153,27 +152,24 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             )
             lig = turkcelestir(raw_lig, tur="lig")
 
-            # Skor ve Durum bilgileri
+            # Skor bilgileri (Yoksa None)
             ev_skor = home_obj.get("score") if isinstance(home_obj, dict) else None
             dep_skor = away_obj.get("score") if isinstance(away_obj, dict) else None
-            
-            status_obj = m.get("status", {})
-            is_finished = status_obj.get("finished", False) if isinstance(status_obj, dict) else False
-            durum = "Bitti" if is_finished else "Oynanmadı"
 
             if (ev, dep) in mevcut_set:
-                # Var olan maçın skorunu ve durumunu güncelle
-                execute_d1(
-                    "UPDATE maclar SET ev_skor = ?, dep_skor = ?, durum = ? WHERE ev_sahibi = ? AND deplasman = ?",
-                    [ev_skor, dep_skor, durum, ev, dep]
-                )
-                guncellenen += 1
+                # Var olan maçın skorlarını güncelle
+                if ev_skor is not None and dep_skor is not None:
+                    execute_d1(
+                        "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
+                        [ev_skor, dep_skor, ev, dep]
+                    )
+                    guncellenen += 1
             else:
                 # Yeni maçı ekle
                 tahmin = rastgele_tahmin_uret()
                 execute_d1(
-                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin, ev_skor, dep_skor, durum) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    [saat, ev, dep, lig, tahmin, ev_skor, dep_skor, durum]
+                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin, ev_skor, dep_skor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [saat, ev, dep, lig, tahmin, ev_skor, dep_skor]
                 )
                 mevcut_set.add((ev, dep))
                 yeni_eklenen += 1
@@ -190,19 +186,15 @@ def yarin_bultenini_yukle(chat_id=None):
 def biten_maclari_getir(chat_id=None):
     init_d1_db()
     try:
-        # Biten veya skoru olan maçları sorgula
-        maclar = execute_d1("SELECT * FROM maclar WHERE durum = 'Bitti' OR (ev_skor IS NOT NULL AND ev_skor >= 0)") or []
-        
-        if not maclar:
-            # Durum alanı bitti yapılmamışsa tüm listeyi deneyelim
-            maclar = execute_d1("SELECT * FROM maclar WHERE ev_skor IS NOT NULL") or []
+        # Skoru olan (oynanmış) maçları getir
+        maclar = execute_d1("SELECT * FROM maclar WHERE ev_skor IS NOT NULL AND ev_skor >= 0") or []
 
         if not maclar:
-            telegram_post("📊 Henüz skoru girilmiş veya biten maç bulunmuyor.", chat_id)
+            telegram_post("📊 Henüz skoru girilmiş maç bulunmuyor.", chat_id)
             return
 
         mesaj = "🏆 <b>BİTEN MAÇLAR VE SKORLAR</b>\n\n"
-        for m in maclar[:15]:  # Mesaj sınırı için ilk 15 maç
+        for m in maclar[:15]:
             ev = m.get("ev_sahibi", "")
             dep = m.get("deplasman", "")
             ev_s = m.get("ev_skor", 0)
