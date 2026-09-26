@@ -1,63 +1,51 @@
-import os
-import threading
 from flask import Flask, request, jsonify
+import bot
 import config
-from bot import (
-    bulteni_apiden_veritabanina_yukle,
-    veritabanindan_bulten_getir,
-    telegram_post
-)
 
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Bot Servisi Aktif!", 200
+    return "Bot Aktif ve Çalışıyor!", 200
 
 @app.route("/webhook", methods=["POST"])
-def telegram_webhook():
-    data = request.get_json(silent=True) or {}
-    
-    # Telegram mesaj kontrolü (normal veya düzenlenmiş mesajlar için)
-    message = data.get("message") or data.get("edited_message") or {}
+def webhook():
+    update = request.get_json(silent=True)
+    if not update:
+        return jsonify({"status": "error"}), 400
+
+    message = update.get("message") or update.get("edited_message")
+    if not message:
+        return jsonify({"status": "ok"}), 200
+
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "").strip()
 
-    if text and chat_id:
-        komut = text.split()[0].lower()
+    if not text or not chat_id:
+        return jsonify({"status": "ok"}), 200
 
-        if komut in ["/start", "/yardim"]:
-            mesaj = (
-                "🤖 <b>Futbol Tahmin Botu</b>\n\n"
-                "📌 <b>Komutlar:</b>\n"
-                "▫️ /guncelle - Güncel bülteni API'den çeker ve veritabanına kaydeder.\n"
-                "▫️ /bbb - Günün kalan maçlarını ve tahminleri listeler.\n"
-                "▫️ /bbb_all - Saat filtresiz veritabanındaki tüm maçları listeler (Test)."
-            )
-            telegram_post(mesaj, chat_id)
+    komut = text.split()[0].lower()
 
-        elif komut in ["/guncelle", "/update"]:
-            threading.Thread(
-                target=bulteni_apiden_veritabanina_yukle, 
-                args=(chat_id,)
-            ).start()
+    if komut in ["/start", "/yardim"]:
+        mesaj = (
+            "🤖 <b>Futbol Tahmin Botu</b>\n\n"
+            "📌 <b>Komutlar:</b>\n"
+            "▫️ /guncelle - Güncel bülteni API'den çeker.\n"
+            "▫️ /bbb - Günün kalan maçlarını listeler.\n"
+            "▫️ /bbb_all - Tüm maçları listeler."
+        )
+        bot.telegram_post(mesaj, chat_id)
 
-        elif komut in ["/bbb", "/ototahmin", "/bulten"]:
-            # filtreli=True parametresi ile çağrılır (Saat filtresi aktif)
-            threading.Thread(
-                target=veritabanindan_bulten_getir, 
-                args=(chat_id, True)
-            ).start()
+    elif komut in ["/guncelle", "/update"]:
+        bot.bulteni_apiden_veritabanina_yukle(chat_id)
 
-        elif komut in ["/bbb_all", "/hepsi"]:
-            # filtreli=False parametresi ile çağrılır (Tüm maçlar)
-            threading.Thread(
-                target=veritabanindan_bulten_getir, 
-                args=(chat_id, False)
-            ).start()
+    elif komut in ["/bbb", "/ototahmin", "/bulten"]:
+        bot.veritabanindan_bulten_getir(chat_id, filtreli=True)
+
+    elif komut in ["/bbb_all", "/hepsi"]:
+        bot.veritabanindan_bulten_getir(chat_id, filtreli=False)
 
     return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000)
