@@ -1,44 +1,36 @@
-import pymysql
-import config
+import sqlite3
 
 def get_db_connection():
-    """MySQL veritabanına bağlantı sağlar."""
     try:
-        return pymysql.connect(
-            host=config.MYSQL_HOST,
-            port=int(config.MYSQL_PORT),
-            user=config.MYSQL_USER,
-            password=config.MYSQL_PASSWORD,
-            db=config.MYSQL_DB,
-            charset="utf8mb4",
-            connect_timeout=10,
-            autocommit=True,
-            cursorclass=pymysql.cursors.DictCursor
-        )
+        # SQLite proje dizininde maclar.db adında bir dosya oluşturur
+        conn = sqlite3.connect("maclar.db")
+        conn.row_factory = sqlite3.Row  # Verileri sözlük gibi okumayı sağlar
+        return conn
     except Exception as e:
-        print("❌ DB Bağlantı Hatası:", e)
+        print(f"❌ SQLite Bağlantı Hatası: {e}")
         return None
 
-def tablo_kur():
-    """Uygulama başladığında maclar tablosunu oluşturur."""
+def init_db():
+    """Veritabanı tablosu yoksa otomatik oluşturur."""
     conn = get_db_connection()
-    if not conn:
-        print("❌ Tablo kurulamadı: DB Bağlantısı yok.")
-        return
-    try:
-        with conn.cursor() as cursor:
+    if conn:
+        try:
+            cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS maclar (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    saat VARCHAR(20),
-                    ev_sahibi VARCHAR(150),
-                    deplasman VARCHAR(150),
-                    lig VARCHAR(100),
-                    tahmin VARCHAR(50)
-                );
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    saat TEXT,
+                    ev_sahibi TEXT,
+                    deplasman TEXT,
+                    lig TEXT,
+                    tahmin TEXT
+                )
             """)
-        print("✅ MySQL Tablosu Hazır.")
-    except Exception as e:
-        print("❌ TABLO OLUSTURMA HATASI:", e)
-    finally:
-        conn.close()
+            conn.commit()
+        except Exception as e:
+            print(f"❌ Tablo Oluşturma Hatası: {e}")
+        finally:
+            conn.close()
+
+# Uygulama başladığında veritabanını ve tabloyu hazırla
+init_db()
