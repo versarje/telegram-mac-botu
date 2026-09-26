@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import config
 from db import get_db_connection
 
-# Türkiye Saati (UTC+3) Ayarı
+# Türkiye Saati (UTC+3)
 TURKEY_TZ = timezone(timedelta(hours=3))
 
 def get_turkey_now():
@@ -13,7 +13,6 @@ def get_turkey_now():
     return datetime.now(TURKEY_TZ)
 
 def telegram_post(text, chat_id=None):
-    """Telegram API üzerinden mesaj gönderir."""
     target_chat_id = chat_id or config.TELEGRAM_CHAT_ID
     if not target_chat_id or not config.TELEGRAM_BOT_TOKEN:
         print("❌ Telegram token veya Chat ID eksik.")
@@ -50,11 +49,17 @@ def turkcelestir(metin, tur="takim"):
     return metin.strip()
 
 def timestamp_saate_cevir(ts):
-    """Timestamp değerini Türkiye saatine göre HH:MM formatına çevirir."""
+    """
+    API'den gelen Unix Timestamp (UTC) bilgisini 
+    Türkiye saatine (+3 saat) çevirip HH:MM formatında verir.
+    """
     try:
-        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(TURKEY_TZ)
+        ts_int = int(ts)
+        # UTC datetime oluşturup Türkiye saat dilimine dönüştür
+        dt = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(TURKEY_TZ)
         return dt.strftime("%H:%M")
-    except Exception:
+    except Exception as e:
+        print(f"Saat dönüştürme hatası: {e}")
         return "00:00"
 
 def rastgele_tahmin_uret():
@@ -66,16 +71,13 @@ def rastgele_tahmin_uret():
     return random.choice(tahminler)
 
 def api_yanitindan_maclari_ayikla(data):
-    """API'nin farklı yanıt yapılarını esnek şekilde tarar."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        # Olası tüm anahtar isimlerini kontrol et
         for key in ["response", "events", "data", "matches", "results"]:
             if key in data and isinstance(data[key], list):
                 return data[key]
             elif key in data and isinstance(data[key], dict):
-                # Derinlemesine arama (örneğin data['response']['events'])
                 for sub_key in ["events", "matches"]:
                     if sub_key in data[key] and isinstance(data[key][sub_key], list):
                         return data[key][sub_key]
@@ -96,72 +98,67 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
     
-    # RapidAPI parametre yapısı (YYYY-MM-DD kabul eder)
     url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str}"
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
-        
+        events = []
         if res.status_code == 200:
-            raw_json = res.json()
-            events = api_yanitindan_maclari_ayikla(raw_json)
+            events = api_yanitindan_maclari_ayikla(res.json())
             
-            if not events:
-                # Alternatif olarak tire olmadan dene
-                alt_url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str.replace('-', '')}"
-                res_alt = requests.get(alt_url, headers=headers, timeout=25)
-                if res_alt.status_code == 200:
-                    events = api_yanitindan_maclari_ayikla(res_alt.json())
+        if not events:
+            alt_url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str.replace('-', '')}"
+            res_alt = requests.get(alt_url, headers=headers, timeout=25)
+            if res_alt.status_code == 200:
+                events = api_yanitindan_maclari_ayikla(res_alt.json())
 
-            if not events:
-                telegram_post("⚽ API'de bugün için kaydedilecek maç bulunamadı veya API yanıtı boş.", chat_id)
-                return
+        if not events:
+            telegram_post("⚽ API'de bugün için kaydedilecek maç bulunamadı.", chat_id)
+            return
 
-            tum_maclar = []
-            for m in events:
-                if not isinstance(m, dict):
-                    continue
+        tum_maclar = []
+        for m in events:
+            if not isinstance(m, dict):
+                continue
 
-                raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
-                raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
-                ev = turkcelestir(raw_ev, tur="takim")
-                dep = turkcelestir(raw_dep, tur="takim")
+            raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
+            raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
+            ev = turkcelestir(raw_ev, tur="takim")
+            dep = turkcelestir(raw_dep, tur="takim")
 
-                startTimestamp = m.get("startTimestamp")
-                saat = timestamp_saate_cevir(startTimestamp) if startTimestamp else "00:00"
+            startTimestamp = m.get("startTimestamp")
+            saat = timestamp_saate_cevir(startTimestamp) if startTimestamp else "00:00"
 
-                raw_lig = metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
-                lig = turkcelestir(raw_lig, tur="lig")
+            raw_lig = metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
+            lig = turkcelestir(raw_lig, tur="lig")
 
-                tahmin = rastgele_tahmin_uret()
+            tahmin = rastgele_tahmin_uret()
 
-                tum_maclar.append({
-                    "saat": saat,
-                    "ev": ev,
-                    "dep": dep,
-                    "lig": lig,
-                    "tahmin": tahmin
-                })
+            tum_maclar.append({
+                "saat": saat,
+                "ev": ev,
+                "dep": dep,
+                "lig": lig,
+                "tahmin": tahmin
+            })
 
-            conn = get_db_connection()
-            if conn:
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("DELETE FROM maclar")
-                        sql = """
-                            INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """
-                        for m in tum_maclar:
-                            cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
-                    conn.commit()
-                    telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
-                except Exception as db_err:
-                    telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
-                finally:
-                    conn.close()
-        else:
-            telegram_post(f"❌ API Bağlantı Hatası! Kod: {res.status_code}", chat_id)
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM maclar")
+                    sql = """
+                        INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """
+                    for m in tum_maclar:
+                        cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
+                conn.commit()
+                telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
+            except Exception as db_err:
+                telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
+            finally:
+                conn.close()
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
@@ -171,7 +168,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
 def veritabanindan_bulten_getir(chat_id=None):
     now_tr = get_turkey_now()
-    simdiki_saat = now_tr.strftime("%H:%M") # Türkiye saatine göre filtreler
+    simdiki_saat = now_tr.strftime("%H:%M")
     
     conn = get_db_connection()
     if not conn:
@@ -180,7 +177,7 @@ def veritabanindan_bulten_getir(chat_id=None):
 
     try:
         with conn.cursor() as cursor:
-            # Türkiye saatinden sonra başlayacak maçları çek
+            # Türkiye saatinden sonraki tüm maçları saat sırasıyla çek
             sql = """
                 SELECT saat, ev_sahibi, deplasman, lig, tahmin 
                 FROM maclar 
