@@ -23,12 +23,15 @@ def webhook():
         bot.telegram_post(
             "👋 <b>Futbol Tahmin Botuna Hoş Geldiniz!</b>\n\n"
             "Komutlar:\n"
-            "⚽ <b>/guncelle</b> - Günün maçlarını çeker ve tahminleri veritabanına kaydeder.\n"
+            "⚽ <b>/guncelle</b> - Bugünün maçlarını çeker ve veritabanına kaydeder.\n"
+            "📅 <b>/yarin</b> - Yarının bültenini çeker ve veritabanına kaydeder.\n"
             "🏆 <b>/skorlar</b> - Dün ve bugünün biten maç skorlarını ve tahmin başarı oranını getirir.", 
             chat_id
         )
     elif text == "/guncelle":
         bot.bulteni_apiden_veritabanina_yukle(chat_id)
+    elif text == "/yarin":
+        bot.yarin_bultenini_yukle(chat_id)
     elif text in ["/skorlar", "/sonuclar"]:
         bot.biten_maclari_getir(chat_id)
 
