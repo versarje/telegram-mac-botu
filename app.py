@@ -1,15 +1,16 @@
 import os
-import json
+import re
 import random
 import requests
 import threading
+import pymysql
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ KONFİGÜRASYONLAR
+# ⚙️ KONFİGÜRASYONLAR (RAPIDAPI & TELEGRAM)
 # ==========================================
 RAPIDAPI_KEY = "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a"
 RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
@@ -18,34 +19,99 @@ BASE_URL = f"https://{RAPIDAPI_HOST}"
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1004461429503"
 
-DB_FILE = "database.json"
+# ==========================================
+# 🗄️ AIVEN MYSQL VERİTABANI BAĞLANTISI
+# ==========================================
+MYSQL_HOST = "mysql-2d07f53d-umuttopal51-ec18.e.aivencloud.com"
+MYSQL_PORT = 21611
+MYSQL_USER = "avnadmin"
+MYSQL_PASSWORD = "AVNS_H5i1d0aVTmZE1CfZZrQ"
+MYSQL_DB = "defaultdb"
 
 # ==========================================
-# 🔄 YEREL VERİTABANI İŞLEMLERİ
+# 🔤 TÜRKÇELEŞTİRME SÖZLÜKLERİ
 # ==========================================
-def db_oku():
-    if not os.path.exists(DB_FILE):
-        veri = {"tahminler": {}}
-        db_yaz(veri)
-        return veri
+LIG_SOZLUK = {
+    "Premier League": "İngiltere Premier Lig",
+    "LaLiga": "İspanya La Liga",
+    "Serie A": "İtalya Serie A",
+    "Bundesliga": "Almanya Bundesliga",
+    "Ligue 1": "Fransa Ligue 1",
+    "Super Lig": "Trendyol Süper Lig",
+    "Eredivisie": "Hollanda Eredivisie",
+    "Primeira Liga": "Portekiz Süper Ligi",
+    "UEFA Champions League": "UEFA Şampiyonlar Ligi",
+    "UEFA Europa League": "UEFA Avrupa Ligi",
+    "UEFA Conference League": "UEFA Konferans Ligi",
+    "Championship": "İngiltere Championship"
+}
 
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if "tahminler" not in data: data["tahminler"] = {}
-            return data
-    except Exception as e:
-        print("❌ [DB OKUMA HATASI]:", e)
-        return {"tahminler": {}}
+TAKIM_SOZLUK = {
+    "Bayern München": "Bayern Münih",
+    "Bayern Munich": "Bayern Münih",
+    "Red Star Belgrade": "Kızılıldız",
+    "Sporting CP": "Sporting Lizbon",
+    "Athletic Club": "Athletic Bilbao",
+    "Inter": "Inter Milan",
+    "AC Milan": "Milan",
+    "PSV Eindhoven": "PSV",
+    "AZ Alkmaar": "AZ Alkmaar",
+    "Köln": "Köln",
+    "Nürnberg": "Nürnberg"
+}
 
-def db_yaz(yeni_veri):
+def turkcelestir(metin, tur="takim"):
+    if not metin:
+        return "Bilinmiyor"
+    
+    # Sözlük kontrolü
+    sozluk = LIG_SOZLUK if tur == "lig" else TAKIM_SOZLUK
+    for eng, tr in sozluk.items():
+        if eng.lower() in metin.lower():
+            return tr
+            
+    if tur == "takim":
+        # Takım isimlerindeki genel ekleri temizleme
+        metin = re.sub(r'\b(FC|CF|BSC|FK|SK|SV|AC|SC)\b', '', metin, flags=re.IGNORECASE).strip()
+        
+    return metin
+
+def db_baglan():
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        db=MYSQL_DB,
+        charset="utf8mb4",
+        connect_timeout=10,
+        autocommit=True,
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
+def tablo_kur():
     try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(yeni_veri, f, ensure_ascii=False, indent=2)
-        return True
+        conn = db_baglan()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tahminler (
+                    match_id VARCHAR(50) PRIMARY KEY,
+                    mac VARCHAR(150),
+                    lig VARCHAR(100),
+                    saat VARCHAR(20),
+                    tahmin VARCHAR(50),
+                    tur VARCHAR(20),
+                    skor VARCHAR(20) DEFAULT '0-0',
+                    durum VARCHAR(50) DEFAULT '⏳ BEKLENİYOR',
+                    tarih VARCHAR(20)
+                );
+            """)
+        conn.close()
+        print("✅ MySQL Tablosu Hazır.")
     except Exception as e:
-        print("❌ [DB YAZMA HATASI]:", e)
-        return False
+        print("❌ [MYSQL TABLO HATA]:", e)
+
+tablo_kur()
 
 # ==========================================
 # 1. TELEGRAM & API İSTEK FONKSİYONLARI
@@ -105,47 +171,31 @@ def gunun_maclarini_cek():
 
     return []
 
-# ==========================================
-# 🔍 YERDEN VERİ AYIKLAMA YARDIMCISI (PARSER)
-# ==========================================
 def metin_veya_sozlukten_al(data, *anahtarlar):
-    """Farklı JSON yapıları içinden doğru metni bulur."""
-    if not data:
-        return ""
-    if isinstance(data, str):
-        return data
+    if not data: return ""
+    if isinstance(data, str): return data
     if isinstance(data, dict):
         for key in anahtarlar:
             val = data.get(key)
             if val:
-                if isinstance(val, str):
-                    return val
+                if isinstance(val, str): return val
                 elif isinstance(val, dict):
                     res = val.get("name", val.get("text", ""))
                     if res: return str(res)
     return ""
 
-# ==========================================
-# 🎯 TAHMİN ALGORİTMASI
-# ==========================================
 def akilli_tahmin_uret(match_id, ev, dep):
-    """
-    Rastgelelik yerine maç id'si ve takim isimlerine bagli
-    tutarlı ve belirli kurallara göre tahmin belirler.
-    """
     TAHMINLER = [
         ("⚽ 2.5 ÜST", "UST25"),
         ("🛡️ 2.5 ALT", "ALT25"),
         ("🤝 KG VAR", "KG_VAR")
     ]
-    
-    # Isim uzunlukları ve ID ile tutarlı index üretimi
     seed = len(ev) + len(dep) + int("".join([c for c in str(match_id) if c.isdigit()] or "1"))
     indeks = seed % len(TAHMINLER)
     return TAHMINLER[indeks]
 
 # ==========================================
-# 2. RASTGELE / AKILLI TAHMİNLİ BÜLTEN (/bbb)
+# 2. TÜRKÇELEŞTİRİLMİŞ BÜLTEN (/bbb)
 # ==========================================
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
@@ -159,72 +209,72 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API bağlantısı kurulamadı.", chat_id)
         return
 
-    db_veri = db_oku()
-
     mesaj_satirlari = [
         f"🎯 <b>GÜNÜN MAÇLARI VE TAHMİNLER ({tarih_gorunum})</b>",
         "-----------------------------------------"
     ]
 
     islenen_mac_sayisi = 0
-    for m in events[:15]:
-        fid = str(m.get("id", m.get("match_id", m.get("eventId", islenen_mac_sayisi))))
-        
-        # Derin JSON parse işlemleri
-        lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
-              metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
+    conn = db_baglan()
 
-        ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or \
-             metin_veya_sozlukten_al(m.get("home_team"), "name") or \
-             metin_veya_sozlukten_al(m.get("home"), "name") or "Ev Sahibi"
+    try:
+        with conn.cursor() as cursor:
+            for m in events[:15]:
+                fid = str(m.get("id", m.get("match_id", m.get("eventId", islenen_mac_sayisi))))
+                
+                raw_lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
+                          metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
 
-        dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or \
-              metin_veya_sozlukten_al(m.get("away_team"), "name") or \
-              metin_veya_sozlukten_al(m.get("away"), "name") or "Deplasman"
+                raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or \
+                         metin_veya_sozlukten_al(m.get("home_team"), "name") or \
+                         metin_veya_sozlukten_al(m.get("home"), "name") or "Ev Sahibi"
 
-        # Saat ayrıştırma
-        time_val = m.get("time", m.get("start_time", ""))
-        timestamp = m.get("startTimestamp", None)
+                raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or \
+                          metin_veya_sozlukten_al(m.get("away_team"), "name") or \
+                          metin_veya_sozlukten_al(m.get("away"), "name") or "Deplasman"
 
-        if timestamp and isinstance(timestamp, (int, float)):
-            saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
-        elif time_val and ":" in str(time_val):
-            # '26.09.2026 18:00' şeklinde geldiyse sadece saat kısmını al
-            saat_parca = str(time_val).split()
-            saat_tsi = saat_parca[-1] if len(saat_parca) > 1 else str(time_val)
-        else:
-            saat_tsi = "--:--"
+                # Türkçe Dönüşümleri
+                lig = turkcelestir(raw_lig, tur="lig")
+                ev = turkcelestir(raw_ev, tur="takim")
+                dep = turkcelestir(raw_dep, tur="takim")
 
-        # Akıllı / Tutarlı Tahmin Belirleme
-        secilen_tahmin_metin, secilen_tahmin_tur = akilli_tahmin_uret(fid, ev, dep)
+                time_val = m.get("time", m.get("start_time", ""))
+                timestamp = m.get("startTimestamp", None)
 
-        # Veritabanı kaydı
-        db_veri["tahminler"][fid] = {
-            "mac": f"{ev} vs {dep}",
-            "lig": lig,
-            "saat": saat_tsi,
-            "tahmin": secilen_tahmin_metin,
-            "tur": secilen_tahmin_tur,
-            "skor": "0-0",
-            "durum": "⏳ BEKLENİYOR"
-        }
+                if timestamp and isinstance(timestamp, (int, float)):
+                    saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
+                elif time_val and ":" in str(time_val):
+                    saat_parca = str(time_val).split()
+                    saat_tsi = saat_parca[-1] if len(saat_parca) > 1 else str(time_val)
+                else:
+                    saat_tsi = "--:--"
 
-        mesaj_satirlari.append(
-            f"⏰ <b>{saat_tsi}</b> | 🏆 <i>{lig}</i>\n"
-            f"⚔️ <b>{ev} vs {dep}</b>\n"
-            f"🎯 Tahmin: <b>{secilen_tahmin_metin}</b>\n"
-        )
-        islenen_mac_sayisi += 1
+                secilen_tahmin_metin, secilen_tahmin_tur = akilli_tahmin_uret(fid, ev, dep)
+                mac_adi = f"{ev} vs {dep}"
 
-    db_yaz(db_veri)
+                sql = """
+                    INSERT INTO tahminler (match_id, mac, lig, saat, tahmin, tur, tarih)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE mac=%s, saat=%s, tarih=%s;
+                """
+                cursor.execute(sql, (fid, mac_adi, lig, saat_tsi, secilen_tahmin_metin, secilen_tahmin_tur, tarih_gorunum, mac_adi, saat_tsi, tarih_gorunum))
+
+                mesaj_satirlari.append(
+                    f"⏰ <b>{saat_tsi}</b> | 🏆 <i>{lig}</i>\n"
+                    f"⚔️ <b>{ev} vs {dep}</b>\n"
+                    f"🎯 Tahmin: <b>{secilen_tahmin_metin}</b>\n"
+                )
+                islenen_mac_sayisi += 1
+    finally:
+        conn.close()
 
     mesaj_satirlari.append("-----------------------------------------")
-    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazarak durumlarını kontrol edebilirsiniz.</i>")
+    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazabilirsiniz.</i>")
 
     telegram_post("\n".join(mesaj_satirlari), chat_id)
 
 # ==========================================
-# 3. SONUÇ RAPORU VE KONTROL (/sonuc)
+# 3. MYSQL SONUÇ RAPORU (/sonuc)
 # ==========================================
 def ayrintili_mac_sonuclarini_getir(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
@@ -247,75 +297,71 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
         if status in ["finished", "ft", "ended", "100"]:
             biten_maclar[fid] = m
 
-    db_veri = db_oku()
-    tahminler = db_veri.get("tahminler", {})
+    conn = db_baglan()
+    tahminler = []
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM tahminler WHERE durum = '⏳ BEKLENİYOR'")
+            bekleyenler_db = cursor.fetchall()
+
+            for t_data in bekleyenler_db:
+                fid = t_data["match_id"]
+                if fid in biten_maclar:
+                    m = biten_maclar[fid]
+                    home_score = m.get("homeScore", {}).get("current", m.get("scores", {}).get("home", 0))
+                    away_score = m.get("awayScore", {}).get("current", m.get("scores", {}).get("away", 0))
+
+                    try:
+                        home_score, away_score = int(home_score), int(away_score)
+                    except:
+                        home_score, away_score = 0, 0
+
+                    toplam_gol = home_score + away_score
+                    kg_var = (home_score > 0 and away_score > 0)
+                    tur = t_data["tur"]
+                    tuttu = False
+
+                    if tur == "UST25" and toplam_gol > 2: tuttu = True
+                    elif tur == "ALT25" and toplam_gol < 3: tuttu = True
+                    elif tur == "KG_VAR" and kg_var: tuttu = True
+
+                    yeni_skor = f"{home_score}-{away_score}"
+                    yeni_durum = "✅ TUTTU" if tuttu else "❌ GELMEDİ"
+
+                    cursor.execute("UPDATE tahminler SET skor = %s, durum = %s WHERE match_id = %s", (yeni_skor, yeni_durum, fid))
+
+            cursor.execute("SELECT * FROM tahminler WHERE tarih = %s", (tarih_gorunum,))
+            tahminler = cursor.fetchall()
+    finally:
+        conn.close()
 
     if not tahminler:
-        telegram_post("📊 Henüz kaydedilmiş takip edilen bir maç yok.", chat_id)
+        telegram_post("📊 Henüz bugün için kaydedilmiş maç yok.", chat_id)
         return
 
-    degisiklik_var_mi = False
+    tutanlar, yatanlar, bekleyenler = [], [], []
 
-    for fid, t_data in tahminler.items():
-        if fid in biten_maclar and t_data["durum"] == "⏳ BEKLENİYOR":
-            m = biten_maclar[fid]
-            
-            home_score = m.get("homeScore", {}).get("current", m.get("scores", {}).get("home", 0))
-            away_score = m.get("awayScore", {}).get("current", m.get("scores", {}).get("away", 0))
-            
-            try:
-                home_score = int(home_score)
-                away_score = int(away_score)
-            except:
-                home_score, away_score = 0, 0
-
-            toplam_gol = home_score + away_score
-            kg_var = (home_score > 0 and away_score > 0)
-
-            tur = t_data["tur"]
-            tuttu = False
-
-            if tur == "UST25" and toplam_gol > 2: tuttu = True
-            elif tur == "ALT25" and toplam_gol < 3: tuttu = True
-            elif tur == "KG_VAR" and kg_var: tuttu = True
-
-            t_data["skor"] = f"{home_score}-{away_score}"
-            t_data["durum"] = "✅ TUTTU" if tuttu else "❌ GELMEDİ"
-            degisiklik_var_mi = True
-
-    if degisiklik_var_mi:
-        db_yaz(db_veri)
-
-    tutanlar = []
-    yatanlar = []
-    bekleyenler = []
-
-    for fid, t in tahminler.items():
+    for t in tahminler:
         metin = f"🔹 <b>{t['mac']}</b> ({t['skor']})\n🎯 Tahmin: <i>{t['tahmin']}</i>"
-        if t["durum"] == "✅ TUTTU":
-            tutanlar.append(metin)
-        elif t["durum"] == "❌ GELMEDİ":
-            yatanlar.append(metin)
-        else:
-            bekleyenler.append(f"⏳ <b>{t['mac']}</b> - <i>{t['tahmin']}</i>")
+        if t["durum"] == "✅ TUTTU": tutanlar.append(metin)
+        elif t["durum"] == "❌ GELMEDİ": yatanlar.append(metin)
+        else: bekleyenler.append(f"⏳ <b>{t['mac']}</b> - <i>{t['tahmin']}</i>")
 
     rapor = [f"📊 <b>GÜNÜN TAHMİN SONUÇ RAPORU ({tarih_gorunum})</b>\n"]
 
     if tutanlar:
-        rapor.append("✅ <b>TUTAN TAHMİNLER</b>")
-        rapor.append("-----------------------------------------")
+        rapor.append("✅ <b>TUTAN TAHMİNLER</b>\n" + "-----------------------------------------")
         rapor.extend(tutanlar)
         rapor.append("")
 
     if yatanlar:
-        rapor.append("❌ <b>TUTMAYAN TAHMİNLER</b>")
-        rapor.append("-----------------------------------------")
+        rapor.append("❌ <b>TUTMAYAN TAHMİNLER</b>\n" + "-----------------------------------------")
         rapor.extend(yatanlar)
         rapor.append("")
 
     if bekleyenler:
-        rapor.append("⏳ <b>HENÜZ BİTMEYEN MAÇLAR</b>")
-        rapor.append("-----------------------------------------")
+        rapor.append("⏳ <b>HENÜZ BİTMEYEN MAÇLAR</b>\n" + "-----------------------------------------")
         rapor.extend(bekleyenler[:5])
         rapor.append("")
 
@@ -326,7 +372,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     telegram_post("\n".join(rapor), chat_id)
 
 # ==========================================
-# 4. WEBHOOK & DINLEME
+# 4. WEBHOOK & LİSTEN
 # ==========================================
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
