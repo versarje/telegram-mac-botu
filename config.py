@@ -1,6 +1,6 @@
 import os
 
-# RapidAPI & Telegram Konfigürasyonu
+# RapidAPI & Telegram
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a")
 RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
 BASE_URL = f"https://{RAPIDAPI_HOST}"
@@ -8,16 +8,12 @@ BASE_URL = f"https://{RAPIDAPI_HOST}"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1004461429503")
 
-import os
-
-# Cloudflare D1 Ayarları
+# Cloudflare D1 Ayarları (GitHub engeline takılmaması için varsayılan değer boş bırakıldı)
 CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "9d67b6866b5fbfb1bb8ae080c0e763e2")
 CLOUDFLARE_DATABASE_ID = os.environ.get("CLOUDFLARE_DATABASE_ID", "bade913e-de57-4040-8245-f3f81016d8d7")
-
-# BURAYI KESİNLİKLE BOŞ BIRAK (GitHub görmesin)
 CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
 
-# Sözlükler
+# Lig ve Takım Sözlükleri
 LIG_SOZLUK = {
     "Premier League": "İngiltere Premier Lig",
     "LaLiga": "İspanya La Liga",
@@ -42,7 +38,5 @@ TAKIM_SOZLUK = {
     "Inter": "Inter Milan",
     "AC Milan": "Milan",
     "PSV Eindhoven": "PSV",
-    "AZ Alkmaar": "AZ Alkmaar",
-    "Köln": "Köln",
-    "Nürnberg": "Nürnberg"
+    "AZ Alkmaar": "AZ Alkmaar"
 }
