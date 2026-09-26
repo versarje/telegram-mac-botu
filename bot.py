@@ -3,7 +3,7 @@ import random
 import requests
 from datetime import datetime, timedelta, timezone
 import config
-from db import get_db_connection
+from db import execute_d1, init_d1_db
 
 TURKEY_TZ = timezone(timedelta(hours=3))
 
@@ -103,16 +103,17 @@ def api_yanitindan_maclari_ayikla(data):
             if key in data and isinstance(data[key], list):
                 return data[key]
             elif key in data and isinstance(data[key], dict):
-                for sub_key in ["events", "matches"]:
+                for sub_key in ["events", "matches", "data"]:
                     if sub_key in data[key] and isinstance(data[key][sub_key], list):
                         return data[key][sub_key]
     return []
 
 # ==========================================
-# 1. BÜLTENİ APİ'DEN ÇEKİP EKLE (SİLMEDEN)
+# 1. BÜLTENİ APİ'DEN ÇEKİP D1'E EKLE
 # ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None):
+    init_d1_db()
     now_tr = get_turkey_now()
     bugun_tarih_str = now_tr.strftime("%Y-%m-%d")
     
@@ -136,16 +137,10 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             events = api_yanitindan_maclari_ayikla(res.json())
 
         if not events:
-            kota_mesajı = f"\n\n📊 <b>Kalan API Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
-            telegram_post(f"⚽ API'de bugün için maç bulunamadı.{kota_mesajı}", chat_id)
+            kota_mesaji = f"\n\n📊 <b>Kalan API Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
+            telegram_post(f"⚽ API'de bugün için maç bulunamadı.{kota_mesaji}", chat_id)
             return
 
-        conn = get_db_connection()
-        if not conn:
-            telegram_post("❌ Veritabanı bağlantı hatası.", chat_id)
-            return
-
-        cursor = conn.cursor()
         yeni_eklenen = 0
 
         for m in events:
@@ -157,9 +152,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            # Aynı maç veritabanında zaten varsa tekrar ekleme (Tahmin değişmesin)
-            cursor.execute("SELECT id FROM maclar WHERE ev_sahibi = ? AND deplasman = ?", (ev, dep))
-            if cursor.fetchone():
+            check_res = execute_d1("SELECT id FROM maclar WHERE ev_sahibi = ? AND deplasman = ?", [ev, dep])
+            if check_res is not None and len(check_res) > 0:
                 continue
 
             startTimestamp = m.get("startTimestamp") or m.get("startTime") or m.get("time")
@@ -171,12 +165,9 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             tahmin = rastgele_tahmin_uret()
 
             sql = "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)"
-            cursor.execute(sql, (saat, ev, dep, lig, tahmin))
+            execute_d1(sql, [saat, ev, dep, lig, tahmin])
             yeni_eklenen += 1
 
-        conn.commit()
-        conn.close()
-        
         kota_bilgisi_str = f"\n💳 <b>Kalan API Kullanım Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
         telegram_post(
             f"✅ <b>Bülten Güncellendi!</b>\n"
@@ -189,7 +180,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
 # ==========================================
-# 2. DÜN VE BUGÜNÜN SKORLARINI SORGULA (/skorlar veya /sonuclar)
+# 2. DÜN VE BUGÜNÜN SKORLARINI D1'DE GÜNCELLE VE SKORLARI GETİR
 # ==========================================
 
 def biten_maclari_getir(chat_id=None):
@@ -204,19 +195,12 @@ def biten_maclari_getir(chat_id=None):
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
 
-    conn = get_db_connection()
-    if not conn:
-        telegram_post("❌ Veritabanı bağlantısı kurulamadı.", chat_id)
-        return
-
-    # Hem Dün Hem Bugün için API'den skorları çekip DB'ye güncelle
     for tarih_str in [dun_str, bugun_str]:
         url = f"{config.BASE_URL}/football-get-matches-by-date?date={tarih_str}"
         try:
             res = requests.get(url, headers=headers, timeout=20)
             if res.status_code == 200:
                 events = api_yanitindan_maclari_ayikla(res.json())
-                cursor = conn.cursor()
                 for m in events:
                     raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
                     raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
@@ -227,22 +211,17 @@ def biten_maclari_getir(chat_id=None):
                     away_score = m.get("awayScore", {}).get("current") if isinstance(m.get("awayScore"), dict) else None
 
                     if home_score is not None and away_score is not None:
-                        cursor.execute(
-                            "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
-                            (home_score, away_score, ev, dep)
-                        )
-                conn.commit()
+                        update_sql = "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?"
+                        execute_d1(update_sql, [home_score, away_score, ev, dep])
         except Exception as e:
             print(f"{tarih_str} skor çekme hatası: {e}")
 
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT saat, ev_sahibi, deplasman, tahmin, ev_skor, dep_skor FROM maclar WHERE ev_skor IS NOT NULL AND ev_skor >= 0 ORDER BY saat ASC")
-        bitenler = cursor.fetchall()
+        select_sql = "SELECT saat, ev_sahibi, deplasman, tahmin, ev_skor, dep_skor FROM maclar WHERE ev_skor IS NOT NULL AND ev_skor >= 0 ORDER BY saat ASC"
+        bitenler = execute_d1(select_sql)
 
         if not bitenler:
             telegram_post("⏰ Henüz sonuçlanmış bir maç bulunamadı.", chat_id)
-            conn.close()
             return
 
         mesaj_satirlari = [
@@ -268,5 +247,3 @@ def biten_maclari_getir(chat_id=None):
 
     except Exception as e:
         telegram_post(f"❌ Sonuç getirme hatası: {e}", chat_id)
-    finally:
-        conn.close()
