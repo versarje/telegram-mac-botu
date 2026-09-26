@@ -5,11 +5,9 @@ from datetime import datetime, timedelta, timezone
 import config
 from db import get_db_connection
 
-# Türkiye Saati (UTC+3)
 TURKEY_TZ = timezone(timedelta(hours=3))
 
 def get_turkey_now():
-    """Türkiye yerel saatini döndürür."""
     return datetime.now(TURKEY_TZ)
 
 def telegram_post(text, chat_id=None):
@@ -49,24 +47,14 @@ def turkcelestir(metin, tur="takim"):
     return metin.strip()
 
 def timestamp_saate_cevir(ts):
-    """
-    API'den gelen Unix Timestamp (UTC) veya String saat bilgisini 
-    Türkiye saatine (+3 saat) çevirip HH:MM formatında verir.
-    """
     if not ts:
         return "00:00"
-    
     try:
-        # String formatında doğrudan HH:MM geldiyse al
         if isinstance(ts, str) and ":" in ts and len(ts) <= 8:
             return ts[:5]
-
         ts_int = int(ts)
-        
-        # Millisecond timestamp (13 haneli) gelirse saniyeye çevir
         if ts_int > 100000000000:
             ts_int = ts_int // 1000
-
         dt = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(TURKEY_TZ)
         return dt.strftime("%H:%M")
     except Exception as e:
@@ -93,10 +81,6 @@ def api_yanitindan_maclari_ayikla(data):
                     if sub_key in data[key] and isinstance(data[key][sub_key], list):
                         return data[key][sub_key]
     return []
-
-# ==========================================
-# 1. API'DEN BÜLTEN ÇEKİP VERİTABANINA YÜKLE
-# ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None):
     now_tr = get_turkey_now()
@@ -132,7 +116,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             if not isinstance(m, dict):
                 continue
 
-            # Esnek Takım İsmi Çekimi
             raw_ev = (
                 metin_veya_sozlukten_al(m.get("homeTeam"), "name") or 
                 metin_veya_sozlukten_al(m.get("home"), "name") or 
@@ -146,7 +129,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            # Esnek Saat / Timestamp Çekimi
             startTimestamp = (
                 m.get("startTimestamp") or 
                 m.get("startTimestampMs") or 
@@ -156,7 +138,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             )
             saat = timestamp_saate_cevir(startTimestamp)
 
-            # Esnek Lig İsmi Çekimi
             raw_lig = (
                 metin_veya_sozlukten_al(m.get("tournament"), "name") or 
                 metin_veya_sozlukten_al(m.get("league"), "name") or 
@@ -181,12 +162,12 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                     cursor.execute("DELETE FROM maclar")
                     sql = """
                         INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin)
-                        VALUES (%s, %s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?, ?)
                     """
                     for m in tum_maclar:
                         cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
                 conn.commit()
-                telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
+                telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç kaydedildi.", chat_id)
             except Exception as db_err:
                 telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
             finally:
@@ -194,16 +175,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
-# ==========================================
-# 2. VERİTABANINDAN ÇEKİP TAHMİN SUNMA (/bbb)
-# ==========================================
-
 def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
-    """
-    Veritabanındaki maçları getirir.
-    filtreli=True ise o anki Türkiye saatinden sonraki maçları filtreler.
-    filtreli=False ise saat filtresiz tüm maçları getirir.
-    """
     now_tr = get_turkey_now()
     simdiki_saat = now_tr.strftime("%H:%M")
     
@@ -213,24 +185,15 @@ def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
         return
 
     try:
-        with conn.cursor() as cursor:
-            if filtreli:
-                sql = """
-                    SELECT saat, ev_sahibi, deplasman, lig, tahmin 
-                    FROM maclar 
-                    WHERE saat >= %s 
-                    ORDER BY saat ASC
-                """
-                cursor.execute(sql, (simdiki_saat,))
-            else:
-                sql = """
-                    SELECT saat, ev_sahibi, deplasman, lig, tahmin 
-                    FROM maclar 
-                    ORDER BY saat ASC
-                """
-                cursor.execute(sql)
+        cursor = conn.cursor()
+        if filtreli:
+            sql = "SELECT saat, ev_sahibi, deplasman, lig, tahmin FROM maclar WHERE saat >= ? ORDER BY saat ASC"
+            cursor.execute(sql, (simdiki_saat,))
+        else:
+            sql = "SELECT saat, ev_sahibi, deplasman, lig, tahmin FROM maclar ORDER BY saat ASC"
+            cursor.execute(sql)
 
-            maclar = cursor.fetchall()
+        maclar = cursor.fetchall()
 
         if not maclar:
             telegram_post(
@@ -267,7 +230,6 @@ def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
             telegram_post("\n".join(mesaj_satirlari), chat_id)
 
     except Exception as e:
-        print("❌ DB Okuma Hatası:", e)
-        telegram_post(f"❌ Veritabanından veriler çekilirken hata oluştu: {e}", chat_id)
+        telegram_post(f"❌ DB Okuma Hatası: {e}", chat_id)
     finally:
         conn.close()
