@@ -57,12 +57,16 @@ def timestamp_saate_cevir(ts):
         return "00:00"
     
     try:
-        if isinstance(ts, str) and ":" in ts and len(ts) <= 8:
-            return ts[:5]
+        # String formatında HH:MM geliyorsa
+        if isinstance(ts, str) and ":" in ts:
+            parcalar = ts.split(":")
+            if len(parcalar) >= 2:
+                return f"{parcalar[0].zfill(2)}:{parcalar[1].zfill(2)}"
 
         ts_int = int(ts)
         
-        # Millisecond timestamp (13 haneli) saniyeye çevir
+        # Saniye bazlı timestamp 10 hanelidir (örn: 1727373600).
+        # Millisecond timestamp (13 haneli) ise saniyeye çevir.
         if ts_int > 100000000000:
             ts_int = ts_int // 1000
 
@@ -84,7 +88,7 @@ def api_yanitindan_maclari_ayikla(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ["response", "events", "data", "matches", "results"]:
+        for key in ["events", "response", "data", "matches", "results"]:
             if key in data and isinstance(data[key], list):
                 return data[key]
             elif key in data and isinstance(data[key], dict):
@@ -131,7 +135,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             if not isinstance(m, dict):
                 continue
 
-            # Takım isimlerini esnek okuma
+            # Takım isimlerini okuma
             raw_ev = (
                 metin_veya_sozlukten_al(m.get("homeTeam"), "name") or 
                 metin_veya_sozlukten_al(m.get("home"), "name") or 
@@ -145,19 +149,22 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            # Saat bilgisini esnek okuma
+            # Saat bilgisini detaylı arama (SportAPI7 alternatif alanları)
             startTimestamp = (
                 m.get("startTimestamp") or 
                 m.get("startTimestampMs") or 
+                m.get("startTime") or 
                 m.get("time") or 
-                m.get("startTime") or
-                m.get("formatedStarttime")
+                m.get("formatedStarttime") or
+                (m.get("status", {}).get("startTimestamp") if isinstance(m.get("status"), dict) else None) or
+                (m.get("time", {}).get("currentPeriodStartTimestamp") if isinstance(m.get("time"), dict) else None)
             )
             saat = timestamp_saate_cevir(startTimestamp)
 
-            # Lig bilgisini esnek okuma
+            # Lig bilgisini okuma
             raw_lig = (
                 metin_veya_sozlukten_al(m.get("tournament"), "name") or 
+                metin_veya_sozlukten_al(m.get("category"), "name") or
                 metin_veya_sozlukten_al(m.get("league"), "name") or 
                 m.get("leagueName") or "Futbol"
             )
