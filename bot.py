@@ -32,7 +32,7 @@ def telegram_post(text, chat_id=None):
 
 def metin_veya_sozlukten_al(veri, anahtar="name"):
     if isinstance(veri, dict):
-        return veri.get(anahtar, "")
+        return veri.get(anahtar, "") or veri.get("shortName", "") or veri.get("nameCode", "")
     elif isinstance(veri, str):
         return veri
     return ""
@@ -50,16 +50,27 @@ def turkcelestir(metin, tur="takim"):
 
 def timestamp_saate_cevir(ts):
     """
-    API'den gelen Unix Timestamp (UTC) bilgisini 
+    API'den gelen Unix Timestamp (UTC) veya String saat bilgisini 
     Türkiye saatine (+3 saat) çevirip HH:MM formatında verir.
     """
+    if not ts:
+        return "00:00"
+    
     try:
+        # String formatında doğrudan HH:MM geldiyse al
+        if isinstance(ts, str) and ":" in ts and len(ts) <= 8:
+            return ts[:5]
+
         ts_int = int(ts)
-        # UTC datetime oluşturup Türkiye saat dilimine dönüştür
+        
+        # Millisecond timestamp (13 haneli) gelirse saniyeye çevir
+        if ts_int > 100000000000:
+            ts_int = ts_int // 1000
+
         dt = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(TURKEY_TZ)
         return dt.strftime("%H:%M")
     except Exception as e:
-        print(f"Saat dönüştürme hatası: {e}")
+        print(f"Saat dönüştürme hatası ({ts}): {e}")
         return "00:00"
 
 def rastgele_tahmin_uret():
@@ -121,15 +132,36 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             if not isinstance(m, dict):
                 continue
 
-            raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
-            raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
+            # Esnek Takım İsmi Çekimi
+            raw_ev = (
+                metin_veya_sozlukten_al(m.get("homeTeam"), "name") or 
+                metin_veya_sozlukten_al(m.get("home"), "name") or 
+                m.get("homeTeamName") or "Ev Sahibi"
+            )
+            raw_dep = (
+                metin_veya_sozlukten_al(m.get("awayTeam"), "name") or 
+                metin_veya_sozlukten_al(m.get("away"), "name") or 
+                m.get("awayTeamName") or "Deplasman"
+            )
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            startTimestamp = m.get("startTimestamp")
-            saat = timestamp_saate_cevir(startTimestamp) if startTimestamp else "00:00"
+            # Esnek Saat / Timestamp Çekimi
+            startTimestamp = (
+                m.get("startTimestamp") or 
+                m.get("startTimestampMs") or 
+                m.get("time") or 
+                m.get("startTime") or
+                m.get("formatedStarttime")
+            )
+            saat = timestamp_saate_cevir(startTimestamp)
 
-            raw_lig = metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
+            # Esnek Lig İsmi Çekimi
+            raw_lig = (
+                metin_veya_sozlukten_al(m.get("tournament"), "name") or 
+                metin_veya_sozlukten_al(m.get("league"), "name") or 
+                m.get("leagueName") or "Futbol"
+            )
             lig = turkcelestir(raw_lig, tur="lig")
 
             tahmin = rastgele_tahmin_uret()
