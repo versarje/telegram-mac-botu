@@ -208,6 +208,7 @@ def yarin_bultenini_yukle(chat_id=None):
 def canli_skorlari_guncelle_ve_getir(chat_id=None):
     init_d1_db()
     api_date_str = get_turkey_now().strftime("%Y%m%d")
+    print(f"🔍 Livescores API'ye istek atılıyor, tarih: {api_date_str}")
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
@@ -217,12 +218,15 @@ def canli_skorlari_guncelle_ve_getir(chat_id=None):
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
+        print(f"📥 API Yanıt Kodu: {res.status_code}")
+        
         if res.status_code == 200:
             data = res.json()
-            # Gelen JSON yapısındaki "response" -> "live" dizisini alıyoruz
             matches = data.get("response", {}).get("live", [])
             if not matches and isinstance(data.get("response"), list):
                 matches = data.get("response", [])
+            
+            print(f"⚽ API'den gelen canlı/biten maç sayısı: {len(matches)}")
 
             guncellenen = 0
             for m in matches:
@@ -232,19 +236,25 @@ def canli_skorlari_guncelle_ve_getir(chat_id=None):
                 ev = turkcelestir(metin_veya_sozlukten_al(home_obj, "name"), "takim")
                 dep = turkcelestir(metin_veya_sozlukten_al(away_obj, "name"), "takim")
                 
-                # Doğrudan JSON'daki score alanlarını çekiyoruz
                 ev_skor = home_obj.get("score")
                 dep_skor = away_obj.get("score")
 
+                print(f"-> Kontrol ediliyor: {ev} vs {dep} | Skor: {ev_skor} - {dep_skor}")
+
                 if ev_skor is not None and dep_skor is not None:
-                    execute_d1(
+                    # Veritabanında bu maçı arayalım
+                    sorgu = execute_d1(
                         "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
                         [ev_skor, dep_skor, ev, dep]
                     )
                     guncellenen += 1
-            print(f"Livescores başarıyla güncellendi: {guncellenen} maç işlendi.")
+            
+            print(f"✅ Livescores güncellendi: Toplam {guncellenen} maç işlendi.")
+        else:
+            print(f"❌ API Hatası, içerik: {res.text}")
     except Exception as e:
-        print(f"Livescores API hata: {e}")
+        print(f"❌ Livescores API kritik hata: {e}")
 
     msg, markup = get_paginated_matches_message(0)
     telegram_post(msg, chat_id, markup)
+
