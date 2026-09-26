@@ -82,7 +82,6 @@ def api_request(endpoint, params=None):
         return None
 
 def gunun_maclarini_cek():
-    # TSI (Türkiye Saati) ile O GÜNÜN tarihini dinamik üretir (YYYYMMDD)
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
     formatli_tarih = su_an_tsi.strftime("%Y%m%d")
     
@@ -92,7 +91,6 @@ def gunun_maclarini_cek():
     if not res:
         return []
         
-    # API'den dönen veri yapısını yakalama
     if isinstance(res, dict):
         if "response" in res and isinstance(res["response"], list):
             return res["response"]
@@ -122,18 +120,30 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API bağlantısı kurulamadı.", chat_id)
         return
 
-    # Başlamamış maçları süz
+    # Esnek Başlamamış Maç Süzgeci
     gelecek_maclar = []
+    su_an_timestamp = datetime.utcnow().timestamp()
+
     for m in events:
-        status = str(m.get("status", {}).get("type", m.get("status", ""))).lower()
-        if status in ["notstarted", "ns", "scheduled", "0", "not started"]:
+        status_val = m.get("status", {})
+        if isinstance(status_val, dict):
+            status_str = str(status_val.get("type", status_val.get("description", ""))).lower()
+        else:
+            status_str = str(status_val).lower()
+
+        # Biten maç durumları dışındakileri al
+        bitmis_durumlar = ["finished", "ft", "ended", "100", "cancelled", "postponed", "abandoned"]
+        
+        # Eğer maç henüz bitmediyse veya başlama saati gelecek bir zamandaysa listeye ekle
+        timestamp = m.get("startTimestamp", m.get("time", None))
+        is_future = isinstance(timestamp, (int, float)) and timestamp > su_an_timestamp
+
+        if status_str not in bitmis_durumlar or is_future:
             gelecek_maclar.append(m)
 
-    if not gelecek_maclar:
-        telegram_post("📅 Bugün oynanacak başlamamış maç kalmadı.", chat_id)
-        return
+    # Filtre sonrası maç kalmadıysa bültendeki tüm maçları yedek olarak al
+    secilecek_maclar = gelecek_maclar if gelecek_maclar else events
 
-    # Otomatik Tahmin Havuzu
     TAHMIN_HAVUZU = [
         ("⚽ 2.5 ÜST", "UST25"),
         ("🛡️ 2.5 ALT", "ALT25"),
@@ -148,7 +158,7 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     ]
 
     islenen_mac_sayisi = 0
-    for m in gelecek_maclar[:15]:
+    for m in secilecek_maclar[:15]:
         fid = str(m.get("id", m.get("match_id", islenen_mac_sayisi)))
         lig = m.get("league", {}).get("name", m.get("tournament", {}).get("name", "Futbol"))
         ev = m.get("homeTeam", {}).get("name", m.get("home_team", {}).get("name", "Ev Sahibi"))
@@ -160,10 +170,8 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         else:
             saat_tsi = str(m.get("time", "--:--"))
 
-        # Rastgele Tahmin Seçimi
         secilen_tahmin_metin, secilen_tahmin_tur = random.choice(TAHMIN_HAVUZU)
 
-        # Veritabanına kaydet
         db_veri["tahminler"][fid] = {
             "mac": f"{ev} vs {dep}",
             "lig": lig,
@@ -184,7 +192,7 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     db_yaz(db_veri)
 
     mesaj_satirlari.append("-----------------------------------------")
-    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç veritabanına kaydedildi. Maçlar bitince /sonuc yazarak durumlarını kontrol edebilirsiniz.</i>")
+    mesaj_satirlari.append(f"💾 <i>{islenen_mac_sayisi} maç kaydedildi. Maçlar bitince /sonuc yazarak durumlarını kontrol edebilirsiniz.</i>")
 
     telegram_post("\n".join(mesaj_satirlari), chat_id)
 
@@ -200,11 +208,15 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
         telegram_post("🏁 Maç sonuçları taranırken API verisi alınamadı.", chat_id)
         return
 
-    # Biten maçları listele
     biten_maclar = {}
     for m in events:
         fid = str(m.get("id", m.get("match_id", "")))
-        status = str(m.get("status", {}).get("type", m.get("status", ""))).lower()
+        status_val = m.get("status", {})
+        if isinstance(status_val, dict):
+            status = str(status_val.get("type", status_val.get("description", ""))).lower()
+        else:
+            status = str(status_val).lower()
+
         if status in ["finished", "ft", "ended", "100"]:
             biten_maclar[fid] = m
 
