@@ -57,16 +57,12 @@ def timestamp_saate_cevir(ts):
         return "00:00"
     
     try:
-        # String formatında HH:MM geliyorsa
         if isinstance(ts, str) and ":" in ts:
             parcalar = ts.split(":")
             if len(parcalar) >= 2:
                 return f"{parcalar[0].zfill(2)}:{parcalar[1].zfill(2)}"
 
         ts_int = int(ts)
-        
-        # Saniye bazlı timestamp 10 hanelidir (örn: 1727373600).
-        # Millisecond timestamp (13 haneli) ise saniyeye çevir.
         if ts_int > 100000000000:
             ts_int = ts_int // 1000
 
@@ -84,6 +80,30 @@ def rastgele_tahmin_uret():
     ]
     return random.choice(tahminler)
 
+def tahmin_kontrol_et(tahmin, ev_skor, dep_skor):
+    """Biten maç skoruna göre tahminin durumunu belirler."""
+    if ev_skor is None or dep_skor is None or ev_skor < 0 or dep_skor < 0:
+        return "⏳ Devam Ediyor / Başlamadı"
+
+    toplam_gol = ev_skor + dep_skor
+    
+    if "MS 1" in tahmin:
+        return "✅ TUTTU" if ev_skor > dep_skor else "❌ TUTMADI"
+    elif "MS 2" in tahmin:
+        return "✅ TUTTU" if dep_skor > ev_skor else "❌ TUTMADI"
+    elif "MS X" in tahmin:
+        return "✅ TUTTU" if ev_skor == dep_skor else "❌ TUTMADI"
+    elif "KG VAR" in tahmin:
+        return "✅ TUTTU" if (ev_skor > 0 and dep_skor > 0) else "❌ TUTMADI"
+    elif "KG YOK" in tahmin:
+        return "✅ TUTTU" if (ev_skor == 0 or dep_skor == 0) else "❌ TUTMADI"
+    elif "2.5 ÜST" in tahmin:
+        return "✅ TUTTU" if toplam_gol > 2.5 else "❌ TUTMADI"
+    elif "2.5 ALT" in tahmin:
+        return "✅ TUTTU" if toplam_gol < 2.5 else "❌ TUTMADI"
+    
+    return "❓ Belirsiz"
+
 def api_yanitindan_maclari_ayikla(data):
     if isinstance(data, list):
         return data
@@ -98,7 +118,7 @@ def api_yanitindan_maclari_ayikla(data):
     return []
 
 # ==========================================
-# 1. API'DEN BÜLTEN ÇEKİP VERİTABANINA YÜKLE
+# 1. API'DEN BÜLTEN ÇEKİP VERİTABANINA YÜKLE + KOTA BİLGİSİ
 # ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None):
@@ -116,6 +136,11 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 
     try:
         res = requests.get(url, headers=headers, timeout=25)
+        
+        # RapidAPI Kota Bilgilerini Header'dan Çek
+        kalan_hak = res.headers.get("X-RateLimit-Requests-Remaining", "Bilinmiyor")
+        toplam_hak = res.headers.get("X-RateLimit-Requests-Limit", "Bilinmiyor")
+        
         events = []
         if res.status_code == 200:
             events = api_yanitindan_maclari_ayikla(res.json())
@@ -123,11 +148,15 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
         if not events:
             alt_url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str.replace('-', '')}"
             res_alt = requests.get(alt_url, headers=headers, timeout=25)
+            # Alt istek olursa kota bilgisini güncelle
+            kalan_hak = res_alt.headers.get("X-RateLimit-Requests-Remaining", kalan_hak)
+            toplam_hak = res_alt.headers.get("X-RateLimit-Requests-Limit", toplam_hak)
             if res_alt.status_code == 200:
                 events = api_yanitindan_maclari_ayikla(res_alt.json())
 
         if not events:
-            telegram_post("⚽ API'de bugün için kaydedilecek maç bulunamadı.", chat_id)
+            kota_mesajı = f"\n\n📊 <b>Kalan API Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
+            telegram_post(f"⚽ API'de bugün için kaydedilecek maç bulunamadı.{kota_mesajı}", chat_id)
             return
 
         tum_maclar = []
@@ -135,7 +164,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             if not isinstance(m, dict):
                 continue
 
-            # Takım isimlerini okuma
             raw_ev = (
                 metin_veya_sozlukten_al(m.get("homeTeam"), "name") or 
                 metin_veya_sozlukten_al(m.get("home"), "name") or 
@@ -149,19 +177,16 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
             ev = turkcelestir(raw_ev, tur="takim")
             dep = turkcelestir(raw_dep, tur="takim")
 
-            # Saat bilgisini detaylı arama (SportAPI7 alternatif alanları)
             startTimestamp = (
                 m.get("startTimestamp") or 
                 m.get("startTimestampMs") or 
                 m.get("startTime") or 
                 m.get("time") or 
                 m.get("formatedStarttime") or
-                (m.get("status", {}).get("startTimestamp") if isinstance(m.get("status"), dict) else None) or
-                (m.get("time", {}).get("currentPeriodStartTimestamp") if isinstance(m.get("time"), dict) else None)
+                (m.get("status", {}).get("startTimestamp") if isinstance(m.get("status"), dict) else None)
             )
             saat = timestamp_saate_cevir(startTimestamp)
 
-            # Lig bilgisini okuma
             raw_lig = (
                 metin_veya_sozlukten_al(m.get("tournament"), "name") or 
                 metin_veya_sozlukten_al(m.get("category"), "name") or
@@ -193,7 +218,16 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                     cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
                 
                 conn.commit()
-                telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
+                
+                # Başarı mesajına kalan kota bilgisini ekliyoruz
+                kota_bilgisi_str = f"\n💳 <b>Kalan API Kullanım Hakkı:</b> {kalan_hak} / {toplam_hak}" if kalan_hak != "Bilinmiyor" else ""
+                
+                telegram_post(
+                    f"✅ <b>Bülten Başarıyla Güncellendi!</b>\n"
+                    f"Toplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi."
+                    f"{kota_bilgisi_str}", 
+                    chat_id
+                )
             except Exception as db_err:
                 telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
             finally:
@@ -206,11 +240,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
 # ==========================================
 
 def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
-    """
-    Veritabanındaki maçları getirir.
-    filtreli=True ise o anki Türkiye saatinden sonraki maçları filtreler.
-    filtreli=False ise saat filtresiz tüm maçları getirir.
-    """
     now_tr = get_turkey_now()
     simdiki_saat = now_tr.strftime("%H:%M")
     
@@ -274,7 +303,89 @@ def veritabanindan_bulten_getir(chat_id=None, filtreli=True):
             telegram_post("\n".join(mesaj_satirlari), chat_id)
 
     except Exception as e:
-        print("❌ DB Okuma Hatası:", e)
-        telegram_post(f"❌ Veritabanından veriler çekilirken hata oluştu: {e}", chat_id)
+        telegram_post(f"❌ DB Okuma Hatası: {e}", chat_id)
+    finally:
+        conn.close()
+
+# ==========================================
+# 3. BİTEN MAÇLARIN SKORLARINI VE SONUÇLARINI GETİR (/sonuclar)
+# ==========================================
+
+def biten_maclari_getir(chat_id=None):
+    telegram_post("🔄 <b>Günün skorları çekiliyor ve tahminler kontrol ediliyor...</b>", chat_id)
+
+    now_tr = get_turkey_now()
+    bugun_tarih_str = now_tr.strftime("%Y-%m-%d")
+    
+    headers = {
+        "x-rapidapi-key": config.RAPIDAPI_KEY,
+        "x-rapidapi-host": config.RAPIDAPI_HOST
+    }
+    url = f"{config.BASE_URL}/football-get-matches-by-date?date={bugun_tarih_str}"
+
+    try:
+        res = requests.get(url, headers=headers, timeout=25)
+        if res.status_code == 200:
+            events = api_yanitindan_maclari_ayikla(res.json())
+            
+            conn = get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                for m in events:
+                    raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
+                    raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
+                    ev = turkcelestir(raw_ev, tur="takim")
+                    dep = turkcelestir(raw_dep, tur="takim")
+
+                    home_score = m.get("homeScore", {}).get("current") if isinstance(m.get("homeScore"), dict) else None
+                    away_score = m.get("awayScore", {}).get("current") if isinstance(m.get("awayScore"), dict) else None
+
+                    if home_score is not None and away_score is not None:
+                        cursor.execute(
+                            "UPDATE maclar SET ev_skor = ?, dep_skor = ? WHERE ev_sahibi = ? AND deplasman = ?",
+                            (home_score, away_score, ev, dep)
+                        )
+                conn.commit()
+                conn.close()
+    except Exception as e:
+        print(f"Skor güncelleme hatası: {e}")
+
+    conn = get_db_connection()
+    if not conn:
+        telegram_post("❌ Veritabanı bağlantısı kurulamadı.", chat_id)
+        return
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT saat, ev_sahibi, deplasman, tahmin, ev_skor, dep_skor FROM maclar WHERE ev_skor >= 0 ORDER BY saat ASC")
+        bitenler = cursor.fetchall()
+
+        if not bitenler:
+            telegram_post("⏰ Henüz sonuçlanmış veya skoru girilmiş bir maç bulunamadı.", chat_id)
+            return
+
+        mesaj_satirlari = [
+            "🏆 <b>BITEN MAÇLAR VE TAHMİN SONUÇLARI</b>",
+            "-----------------------------------------"
+        ]
+
+        tutan_sayisi = 0
+        for m in bitenler:
+            durum = tahmin_kontrol_et(m['tahmin'], m['ev_skor'], m['dep_skor'])
+            if "✅" in durum:
+                tutan_sayisi += 1
+
+            mesaj_satirlari.append(
+                f"⏰ <b>{m['saat']}</b> | ⚔️ <b>{m['ev_sahibi']} {m['ev_skor']} - {m['dep_skor']} {m['deplasman']}</b>\n"
+                f"🎯 Tahmin: <b>{m['tahmin']}</b> -> <b>{durum}</b>\n"
+            )
+
+        mesaj_satirlari.append("-----------------------------------------")
+        mesaj_satirlari.append(f"📊 <b>Başarı Oranı: {tutan_sayisi} / {len(bitenler)} Maç Tuttu!</b>")
+
+        telegram_post("\n".join(mesaj_satirlari), chat_id)
+
+    except Exception as e:
+        telegram_post(f"❌ Sonuç getirme hatası: {e}", chat_id)
     finally:
         conn.close()
