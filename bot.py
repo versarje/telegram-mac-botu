@@ -218,14 +218,21 @@ def canli_skorlari_guncelle_ve_getir(chat_id=None):
     try:
         res = requests.get(url, headers=headers, timeout=25)
         if res.status_code == 200:
-            matches = api_yanitindan_maclari_ayikla(res.json())
+            data = res.json()
+            # Gelen JSON yapısındaki "response" -> "live" dizisini alıyoruz
+            matches = data.get("response", {}).get("live", [])
+            if not matches and isinstance(data.get("response"), list):
+                matches = data.get("response", [])
+
             guncellenen = 0
             for m in matches:
                 home_obj = m.get("home", {})
                 away_obj = m.get("away", {})
+                
                 ev = turkcelestir(metin_veya_sozlukten_al(home_obj, "name"), "takim")
                 dep = turkcelestir(metin_veya_sozlukten_al(away_obj, "name"), "takim")
                 
+                # Doğrudan JSON'daki score alanlarını çekiyoruz
                 ev_skor = home_obj.get("score")
                 dep_skor = away_obj.get("score")
 
@@ -235,7 +242,7 @@ def canli_skorlari_guncelle_ve_getir(chat_id=None):
                         [ev_skor, dep_skor, ev, dep]
                     )
                     guncellenen += 1
-            print(f"Livescores güncellendi: {guncellenen} maç işlendi.")
+            print(f"Livescores başarıyla güncellendi: {guncellenen} maç işlendi.")
     except Exception as e:
         print(f"Livescores API hata: {e}")
 
