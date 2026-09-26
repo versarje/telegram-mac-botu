@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ KONFİGÜRASYONLAR (RAPIDAPI & TELEGRAM)
+# ⚙️ KONFİGÜRASYONLAR
 # ==========================================
 RAPIDAPI_KEY = "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a"
 RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
@@ -106,7 +106,46 @@ def gunun_maclarini_cek():
     return []
 
 # ==========================================
-# 2. RASTGELE TAHMİNLİ BÜLTEN (/bbb)
+# 🔍 YERDEN VERİ AYIKLAMA YARDIMCISI (PARSER)
+# ==========================================
+def metin_veya_sozlukten_al(data, *anahtarlar):
+    """Farklı JSON yapıları içinden doğru metni bulur."""
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in anahtarlar:
+            val = data.get(key)
+            if val:
+                if isinstance(val, str):
+                    return val
+                elif isinstance(val, dict):
+                    res = val.get("name", val.get("text", ""))
+                    if res: return str(res)
+    return ""
+
+# ==========================================
+# 🎯 TAHMİN ALGORİTMASI
+# ==========================================
+def akilli_tahmin_uret(match_id, ev, dep):
+    """
+    Rastgelelik yerine maç id'si ve takim isimlerine bagli
+    tutarlı ve belirli kurallara göre tahmin belirler.
+    """
+    TAHMINLER = [
+        ("⚽ 2.5 ÜST", "UST25"),
+        ("🛡️ 2.5 ALT", "ALT25"),
+        ("🤝 KG VAR", "KG_VAR")
+    ]
+    
+    # Isim uzunlukları ve ID ile tutarlı index üretimi
+    seed = len(ev) + len(dep) + int("".join([c for c in str(match_id) if c.isdigit()] or "1"))
+    indeks = seed % len(TAHMINLER)
+    return TAHMINLER[indeks]
+
+# ==========================================
+# 2. RASTGELE / AKILLI TAHMİNLİ BÜLTEN (/bbb)
 # ==========================================
 def rastgele_bulten_tahmin_olustur(chat_id=None):
     su_an_tsi = datetime.utcnow() + timedelta(hours=3)
@@ -120,36 +159,6 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
         telegram_post("📅 Bugün için bültende maç bulunamadı veya API bağlantısı kurulamadı.", chat_id)
         return
 
-    # Esnek Başlamamış Maç Süzgeci
-    gelecek_maclar = []
-    su_an_timestamp = datetime.utcnow().timestamp()
-
-    for m in events:
-        status_val = m.get("status", {})
-        if isinstance(status_val, dict):
-            status_str = str(status_val.get("type", status_val.get("description", ""))).lower()
-        else:
-            status_str = str(status_val).lower()
-
-        # Biten maç durumları dışındakileri al
-        bitmis_durumlar = ["finished", "ft", "ended", "100", "cancelled", "postponed", "abandoned"]
-        
-        # Eğer maç henüz bitmediyse veya başlama saati gelecek bir zamandaysa listeye ekle
-        timestamp = m.get("startTimestamp", m.get("time", None))
-        is_future = isinstance(timestamp, (int, float)) and timestamp > su_an_timestamp
-
-        if status_str not in bitmis_durumlar or is_future:
-            gelecek_maclar.append(m)
-
-    # Filtre sonrası maç kalmadıysa bültendeki tüm maçları yedek olarak al
-    secilecek_maclar = gelecek_maclar if gelecek_maclar else events
-
-    TAHMIN_HAVUZU = [
-        ("⚽ 2.5 ÜST", "UST25"),
-        ("🛡️ 2.5 ALT", "ALT25"),
-        ("🤝 KG VAR", "KG_VAR")
-    ]
-
     db_veri = db_oku()
 
     mesaj_satirlari = [
@@ -158,20 +167,38 @@ def rastgele_bulten_tahmin_olustur(chat_id=None):
     ]
 
     islenen_mac_sayisi = 0
-    for m in secilecek_maclar[:15]:
-        fid = str(m.get("id", m.get("match_id", islenen_mac_sayisi)))
-        lig = m.get("league", {}).get("name", m.get("tournament", {}).get("name", "Futbol"))
-        ev = m.get("homeTeam", {}).get("name", m.get("home_team", {}).get("name", "Ev Sahibi"))
-        dep = m.get("awayTeam", {}).get("name", m.get("away_team", {}).get("name", "Deplasman"))
+    for m in events[:15]:
+        fid = str(m.get("id", m.get("match_id", m.get("eventId", islenen_mac_sayisi))))
+        
+        # Derin JSON parse işlemleri
+        lig = metin_veya_sozlukten_al(m.get("league"), "name") or \
+              metin_veya_sozlukten_al(m.get("tournament"), "name") or "Futbol"
 
-        timestamp = m.get("startTimestamp", m.get("time", None))
+        ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or \
+             metin_veya_sozlukten_al(m.get("home_team"), "name") or \
+             metin_veya_sozlukten_al(m.get("home"), "name") or "Ev Sahibi"
+
+        dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or \
+              metin_veya_sozlukten_al(m.get("away_team"), "name") or \
+              metin_veya_sozlukten_al(m.get("away"), "name") or "Deplasman"
+
+        # Saat ayrıştırma
+        time_val = m.get("time", m.get("start_time", ""))
+        timestamp = m.get("startTimestamp", None)
+
         if timestamp and isinstance(timestamp, (int, float)):
             saat_tsi = (datetime.utcfromtimestamp(timestamp) + timedelta(hours=3)).strftime("%H:%M")
+        elif time_val and ":" in str(time_val):
+            # '26.09.2026 18:00' şeklinde geldiyse sadece saat kısmını al
+            saat_parca = str(time_val).split()
+            saat_tsi = saat_parca[-1] if len(saat_parca) > 1 else str(time_val)
         else:
-            saat_tsi = str(m.get("time", "--:--"))
+            saat_tsi = "--:--"
 
-        secilen_tahmin_metin, secilen_tahmin_tur = random.choice(TAHMIN_HAVUZU)
+        # Akıllı / Tutarlı Tahmin Belirleme
+        secilen_tahmin_metin, secilen_tahmin_tur = akilli_tahmin_uret(fid, ev, dep)
 
+        # Veritabanı kaydı
         db_veri["tahminler"][fid] = {
             "mac": f"{ev} vs {dep}",
             "lig": lig,
@@ -210,7 +237,7 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
 
     biten_maclar = {}
     for m in events:
-        fid = str(m.get("id", m.get("match_id", "")))
+        fid = str(m.get("id", m.get("match_id", m.get("eventId", ""))))
         status_val = m.get("status", {})
         if isinstance(status_val, dict):
             status = str(status_val.get("type", status_val.get("description", ""))).lower()
