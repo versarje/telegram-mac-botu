@@ -5,10 +5,6 @@ from datetime import datetime
 import config
 from db import get_db_connection
 
-# ==========================================
-# YARDIMCI / DÖNÜŞTÜRÜCÜ FONKSİYONLAR
-# ==========================================
-
 def telegram_post(text, chat_id=None):
     """Telegram API üzerinden mesaj gönderir."""
     target_chat_id = chat_id or config.TELEGRAM_CHAT_ID
@@ -28,39 +24,31 @@ def telegram_post(text, chat_id=None):
     except Exception as e:
         print(f"❌ Telegram gönderim hatası: {e}")
 
-
 def metin_veya_sozlukten_al(veri, anahtar="name"):
-    """API'den dönen karmaşık veri tiplerinden metni güvenle çıkarır."""
     if isinstance(veri, dict):
         return veri.get(anahtar, "")
     elif isinstance(veri, str):
         return veri
     return ""
 
-
 def turkcelestir(metin, tur="takim"):
-    """Takım veya lig isimlerindeki yaygın yabancı karakterleri temizler."""
     if not metin:
         return metin
-    düzeltmeler = {
+    duzeltmeler = {
         " FC": "", " FK": "", " SK": "", " SC": "",
         "United": "Utd", "City": "City", "Real": "Real"
     }
-    for k, v in düzeltmeler.items():
+    for k, v in duzeltmeler.items():
         metin = metin.replace(k, v)
     return metin.strip()
 
-
 def timestamp_saate_cevir(ts):
-    """Unix timestamp değerini HH:MM saat formatına çevirir."""
     try:
         return datetime.fromtimestamp(int(ts)).strftime("%H:%M")
     except Exception:
         return "00:00"
 
-
 def rastgele_tahmin_uret():
-    """Maçlar için rastgele mantıklı tahmin üretir."""
     tahminler = [
         "⚽ MS 1", "⚽ MS 2", "🤝 MS X",
         "🔥 KG VAR", "🛡️ KG YOK",
@@ -68,9 +56,7 @@ def rastgele_tahmin_uret():
     ]
     return random.choice(tahminler)
 
-
 def api_yanitindan_maclari_ayikla(data):
-    """API yanıtından maç dizisini çıkartır."""
     if isinstance(data, dict):
         if "response" in data and isinstance(data["response"], list):
             return data["response"]
@@ -82,13 +68,11 @@ def api_yanitindan_maclari_ayikla(data):
         return data
     return []
 
-
 # ==========================================
-# 1. API'DEN ÇEKİP VERİTABANINA KAYDETME (GÜNDE 1 KEZ)
+# 1. API'DEN ÇEKİP VERİTABANINA KAYDETME
 # ==========================================
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None):
-    """Günün tüm maçlarını API'den çeker ve veritabanını günceller."""
     telegram_post("🔄 <b>Günün tüm bülteni API'den çekilip veritabanına işleniyor...</b>", chat_id)
 
     headers = {
@@ -135,7 +119,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                     "tahmin": tahmin
                 })
 
-            # Veritabanını temizle ve yeni tüm bülteni ekle
             conn = get_db_connection()
             if conn:
                 try:
@@ -148,7 +131,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
                         for m in tum_maclar:
                             cursor.execute(sql, (m["saat"], m["ev"], m["dep"], m["lig"], m["tahmin"]))
                     conn.commit()
-                    telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nTotal <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
+                    telegram_post(f"✅ <b>Bülten Başarıyla Güncellendi!</b>\nToplam <b>{len(tum_maclar)}</b> maç veritabanına kaydedildi.", chat_id)
                 except Exception as db_err:
                     telegram_post(f"❌ DB Kayıt Hatası: {db_err}", chat_id)
                 finally:
@@ -158,13 +141,11 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None):
     except Exception as e:
         telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
 
-
 # ==========================================
-# 2. VERİTABANINDAN ÇEKİP TAHMİN SUNMA (/bbb)
+# 2. VERİTABANINDAN ÇEKİP LİSTELEME (/bbb)
 # ==========================================
 
 def veritabanindan_bulten_getir(chat_id=None):
-    """API kullanmadan doğrudan veritabanındaki maçları saat filtresiyle çeker."""
     simdiki_saat = datetime.now().strftime("%H:%M")
     
     conn = get_db_connection()
@@ -174,7 +155,6 @@ def veritabanindan_bulten_getir(chat_id=None):
 
     try:
         with conn.cursor() as cursor:
-            # Sadece şu anki saatten sonra başlayacak maçları çek ve saate göre sırala
             sql = """
                 SELECT saat, ev_sahibi, deplasman, lig, tahmin 
                 FROM maclar 
@@ -192,7 +172,6 @@ def veritabanindan_bulten_getir(chat_id=None):
         toplam_mac = len(maclar)
         toplam_sayfa = (toplam_mac + PARCA_BOYUTU - 1) // PARCA_BOYUTU
 
-        # En fazla ilk 3 sayfayı (45 maçı) listele
         for sayfa in range(min(toplam_sayfa, 3)):
             baslangic = sayfa * PARCA_BOYUTU
             bitis = baslangic + PARCA_BOYUTU
