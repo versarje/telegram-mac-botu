@@ -3,11 +3,8 @@ import config
 
 def execute_d1(sql, params=None):
     """Cloudflare D1 SQL sorgularını REST API üzerinden çalıştırır."""
-    
-    # URL ve HEADERS her fonksiyonda dinamik olarak baştan oluşturulur
     d1_url = f"https://api.cloudflare.com/client/v4/accounts/{config.CLOUDFLARE_ACCOUNT_ID}/d1/database/{config.CLOUDFLARE_DATABASE_ID}/query"
     
-    # Token etrafındaki olası boşlukları .strip() ile temizliyoruz
     token = str(config.CLOUDFLARE_API_TOKEN).strip()
     
     headers = {
@@ -27,12 +24,10 @@ def execute_d1(sql, params=None):
         if res_json.get("success"):
             result_data = res_json.get("result", [])
             if result_data and len(result_data) > 0:
-                results = result_data[0].get("results", [])
-                return results
+                return result_data[0].get("results", [])
             return []
         else:
-            # Hata anında token'ın ilk 5 karakterini yazdırarak Render'ın doğru token'ı okuyup okumadığını teyit ederiz
-            print(f"❌ D1 Hata: {res_json.get('errors')} | Kullanılan Token Başı: {token[:5]}...")
+            print(f"❌ D1 Hata: {res_json.get('errors')}")
             return None
     except Exception as e:
         print(f"❌ D1 Bağlantı Hatası: {e}")
@@ -52,4 +47,4 @@ def init_d1_db():
         dep_skor INTEGER DEFAULT NULL
     );
     """
-    execute_d1(create_table_sql)
+    return execute_d1(create_table_sql)
