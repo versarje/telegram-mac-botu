@@ -34,7 +34,7 @@ def execute_d1(sql, params=None):
         return None
 
 def init_d1_db():
-    """D1 üzerinde maclar tablosunu oluşturur."""
+    """D1 veritabanı tablosunu oluşturur."""
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS maclar (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +44,8 @@ def init_d1_db():
         lig TEXT,
         tahmin TEXT,
         ev_skor INTEGER DEFAULT NULL,
-        dep_skor INTEGER DEFAULT NULL
+        dep_skor INTEGER DEFAULT NULL,
+        tarih TEXT
     );
     """
-    return execute_d1(create_table_sql)
+    execute_d1(create_table_sql)
