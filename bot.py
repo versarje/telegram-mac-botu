@@ -266,3 +266,66 @@ def ayrintili_mac_sonuclarini_getir(chat_id=None):
     rapor.append(f"📈 <b>Özet:</b> {len(tutanlar)} Tutan / {len(yatanlar)} Yatan | Başarı: <b>%{basari_yuzde}</b>")
 
     telegram_post("\n".join(rapor), chat_id)
+
+# bot.py dosyasının EN ALTINA ekleyin:
+
+def canli_maclari_getir(chat_id=None):
+    """O an oynanmakta olan canlı maçları ve anlık skorlarını Telegram'a gönderir."""
+    telegram_post("🔴 <b>Oynanmakta olan canlı maçlar taranıyor...</b>", chat_id)
+
+    headers = {
+        "x-rapidapi-key": config.RAPIDAPI_KEY,
+        "x-rapidapi-host": config.RAPIDAPI_HOST
+    }
+    url = f"{config.BASE_URL}/football-get-live-matches"
+
+    try:
+        res = requests.get(url, headers=headers, timeout=20)
+        kalan_istek = res.headers.get("x-ratelimit-requests-remaining", "Bilinmiyor")
+        
+        if res.status_code == 200:
+            events = api_yanitindan_maclari_ayikla(res.json())
+            
+            if not events:
+                telegram_post("⚽ Şu anda oynanan canlı maç bulunamadı.", chat_id)
+                return
+
+            mesaj_satirlari = [
+                "🔴 <b>CANLI MAÇLAR VE ANLIK DURUM</b>",
+                "-----------------------------------------"
+            ]
+
+            for m in events[:15]:  # En fazla 15 canlı maç göster
+                if not isinstance(m, dict):
+                    continue
+
+                raw_ev = metin_veya_sozlukten_al(m.get("homeTeam"), "name") or "Ev Sahibi"
+                raw_dep = metin_veya_sozlukten_al(m.get("awayTeam"), "name") or "Deplasman"
+                ev = turkcelestir(raw_ev, tur="takim")
+                dep = turkcelestir(raw_dep, tur="takim")
+
+                # Canlı Skor Verisi
+                home_score = m.get("homeScore", {}).get("current", 0) if isinstance(m.get("homeScore"), dict) else 0
+                away_score = m.get("awayScore", {}).get("current", 0) if isinstance(m.get("awayScore"), dict) else 0
+                
+                # Dakika / Durum Bilgisi
+                status_obj = m.get("status", {})
+                if isinstance(status_obj, dict):
+                    dakika = status_obj.get("description", status_obj.get("reason", "Canlı"))
+                else:
+                    dakika = "Canlı"
+
+                mesaj_satirlari.append(
+                    f"⏱️ <b>[{dakika}]</b> ⚔️ <b>{ev} {home_score} - {away_score} {dep}</b>"
+                )
+
+            mesaj_satirlari.append("-----------------------------------------")
+            mesaj_satirlari.append(f"📊 <b>Kalan API Hakkınız:</b> {kalan_istek}")
+            
+            telegram_post("\n".join(mesaj_satirlari), chat_id)
+        else:
+            telegram_post("❌ Canlı maçlar çekilirken API hatası oluştu.", chat_id)
+    except Exception as e:
+        print("❌ Canlı Maç Hatası:", e)
+        telegram_post(f"❌ Bir hata oluştu: {e}", chat_id)
+
