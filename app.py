@@ -1,4 +1,5 @@
 import os
+import threading
 from flask import Flask, request
 import bot
 from db import init_d1_db
@@ -29,12 +30,14 @@ def webhook():
             chat_id
         )
     elif text == "/guncelle":
-        bot.bulteni_apiden_veritabanina_yukle(chat_id)
+        # Ağır API işlemini arkaplanda (Thread ile) başlatıyoruz ki timeout olmasın
+        threading.Thread(target=bot.bulteni_apiden_veritabanina_yukle, args=(chat_id,)).start()
     elif text == "/yarin":
-        bot.yarin_bultenini_yukle(chat_id)
+        threading.Thread(target=bot.yarin_bultenini_yukle, args=(chat_id,)).start()
     elif text in ["/skorlar", "/sonuclar"]:
-        bot.biten_maclari_getir(chat_id)
+        threading.Thread(target=bot.biten_maclari_getir, args=(chat_id,)).start()
 
+    # Telegram'a hemen 200 OK dönülür, böylece bağlantı kopmaz
     return "OK", 200
 
 if __name__ == "__main__":
