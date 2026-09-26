@@ -1,38 +1,44 @@
 import pymysql
 import config
 
-def db_baglan():
-    return pymysql.connect(
-        host=config.MYSQL_HOST,
-        port=config.MYSQL_PORT,
-        user=config.MYSQL_USER,
-        password=config.MYSQL_PASSWORD,
-        db=config.MYSQL_DB,
-        charset="utf8mb4",
-        connect_timeout=10,
-        autocommit=True,
-        cursorclass=pymysql.cursors.DictCursor
-    )
+def get_db_connection():
+    """MySQL veritabanına bağlantı sağlar."""
+    try:
+        return pymysql.connect(
+            host=config.MYSQL_HOST,
+            port=int(config.MYSQL_PORT),
+            user=config.MYSQL_USER,
+            password=config.MYSQL_PASSWORD,
+            db=config.MYSQL_DB,
+            charset="utf8mb4",
+            connect_timeout=10,
+            autocommit=True,
+            cursorclass=pymysql.cursors.DictCursor
+        )
+    except Exception as e:
+        print("❌ DB Bağlantı Hatası:", e)
+        return None
 
 def tablo_kur():
-    """Uygulama ayağa kalktığında tablo yoksa oluşturur."""
+    """Uygulama başladığında maclar tablosunu oluşturur."""
+    conn = get_db_connection()
+    if not conn:
+        print("❌ Tablo kurulamadı: DB Bağlantısı yok.")
+        return
     try:
-        conn = db_baglan()
         with conn.cursor() as cursor:
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tahminler (
-                    match_id VARCHAR(50) PRIMARY KEY,
-                    mac VARCHAR(150),
-                    lig VARCHAR(100),
+                CREATE TABLE IF NOT EXISTS maclar (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
                     saat VARCHAR(20),
-                    tahmin VARCHAR(50),
-                    tur VARCHAR(20),
-                    skor VARCHAR(20) DEFAULT '0-0',
-                    durum VARCHAR(50) DEFAULT '⏳ BEKLENİYOR',
-                    tarih VARCHAR(20)
+                    ev_sahibi VARCHAR(150),
+                    deplasman VARCHAR(150),
+                    lig VARCHAR(100),
+                    tahmin VARCHAR(50)
                 );
             """)
-        conn.close()
         print("✅ MySQL Tablosu Hazır.")
     except Exception as e:
-        print("❌ [MYSQL TABLO HATA]:", e)
+        print("❌ TABLO OLUSTURMA HATASI:", e)
+    finally:
+        conn.close()
