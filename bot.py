@@ -55,7 +55,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
     try:
         print(f"🔍 Oran analizi isteği atılıyor -> URL: {url}")
-        telegram_post("🔍 Oranlar ve karşılaşma verileri API'den alınıyor, rapor hazırlanıyor...", chat_id)
+        telegram_post("🔍 Oranlar ve maç detayları API'den toplanıyor, lütfen bekleyin...", chat_id)
         
         res = requests.get(url, headers=headers, timeout=25)
         if res.status_code != 200:
@@ -65,7 +65,6 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         data = res.json()
         items = []
         
-        # API yanıt yapısını güvenli bir şekilde çözme
         if isinstance(data, dict):
             advantages_obj = data.get("advantages", {})
             if isinstance(advantages_obj, dict):
@@ -92,44 +91,40 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         
         with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f, delimiter=";")
-            # Tam ve açıklayıcı sütun başlıkları
-            writer.writerow(["ID", "Fırsat Türü", "Maç / Etkinlik Adı", "Lig / Organizasyon", "Değer / Oran (%)", "Bahis Bürosu ve Oranlar"])
+            writer.writerow(["ID", "Tür", "Maç / Takımlar", "Lig", "Oran / Değer", "Bahis Büroları ve Oranlar"])
             
-            for idx, item in enumerate(items[:300], start=1):
+            # Sunucu donmasın diye ilk 100 fırsatı detaylı işleyelim
+            for idx, item in enumerate(items[:100], start=1):
                 if not isinstance(item, dict):
                     continue
                 
                 val_type = item.get("type", "ANALIZ")
                 val_oran = item.get("value", 0)
+                event_key = item.get("eventKey")
                 
-                # Maç adını olabilecek tüm olası JSON alanlarından güvenle çekelim
-                match_name = (
-                    item.get("eventName") or 
-                    item.get("name") or 
-                    item.get("matchName") or 
-                    item.get("match") or 
-                    item.get("fixtureName") or
-                    item.get("title")
-                )
-                
-                # Eğer yukarıdakiler boş gelirse, iç içe dict veya eventKey içinden kurtaralım
-                if not match_name:
-                    team_a = item.get("homeTeam") or item.get("home") or ""
-                    team_b = item.get("awayTeam") or item.get("away") or ""
-                    if team_a and team_b:
-                        match_name = f"{team_a} vs {team_b}"
-                    else:
-                        match_name = f"Etkinlik ID: {item.get('eventKey', item.get('id', 'Bilinmeyen'))}"
+                match_name = "Bilinmeyen Maç"
+                league_name = "Bilinmeyen Lig"
 
-                # Lig bilgisini yakalayalım
-                league_name = (
-                    item.get("leagueName") or 
-                    item.get("league") or 
-                    item.get("tournament") or 
-                    item.get("sport", "Genel")
-                )
+                # Eğer eventKey varsa, gördüğün /v0/events/{eventKey} uç noktasından gerçek maç adını çekelim[span_3](start_span)[span_3](end_span)
+                if event_key:
+                    try:
+                        event_url = f"{config.BASE_URL}/v0/events/{event_key}"
+                        ev_res = requests.get(event_url, headers=headers, timeout=5)
+                        if ev_res.status_code == 200:
+                            ev_data = ev_res.json()
+                            # Gelen etkinlik verisinden takım adlarını ve ligi alalım
+                            home = ev_data.get("homeTeam", ev_data.get("home", ""))
+                            away = ev_data.get("awayTeam", ev_data.get("away", ""))
+                            if home and away:
+                                match_name = f"{home} - {away}"
+                            else:
+                                match_name = ev_data.get("name", ev_data.get("eventName", event_key))
+                            
+                            league_name = ev_data.get("leagueName", ev_data.get("league", "Genel"))
+                    except:
+                        pass
 
-                # Outcoming (Bahis siteleri ve oran detayları)
+                # Bahis büroları ve oranlar
                 outcomes = item.get("outcomes", [])
                 siteler = []
                 if isinstance(outcomes, list):
@@ -148,7 +143,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
                 writer.writerow([idx, val_type, match_name, league_name, val_oran, detay_siteler])
 
         print(f"✅ CSV dosyası başarıyla oluşturuldu: {filename}")
-        caption = f"📈 <b>Kesinleştirilmiş Bahis Analiz Raporu</b>\nAPI'den alınan <b>{min(len(items), 300)}</b> adet veri eksiksiz olarak raporlandı."
+        caption = f"📈 <b>Detaylı Maç Analiz Raporu</b>\nAPI'den maç isimleri eşleştirilerek <b>{min(len(items), 100)}</b> adet analiz raporlandı."
         
         telegram_send_document(filename, caption, chat_id)
 
@@ -158,7 +153,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             pass
 
     except Exception as e:
-        err_msg = f"❌ <b>Kritik Hata:</b>\n<code>{str(e)}</code>"
+        err_msg = f"❌ <b>Hata:</b>\n<code>{str(e)}</code>"
         print(err_msg)
         telegram_post(err_msg, chat_id)
 
