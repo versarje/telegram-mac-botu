@@ -149,12 +149,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     if not dt_obj:
         dt_obj = get_turkey_now()
     
-    # Tarihi aralarında boşluk bırakmadan istenen formatta düzenliyoruz (Örn: 20272709 -> yıl + gün + ay veya standart YYYYMMDD)
-    # Eğer API tam olarak YYYYMMDD (Yıl Ay Gün) bekliyorsa strftime("%Y%m%d") kullanılır.
-    # Örnek verdiğin format (Yıl + Gün + Ay sırasıyla) isteniyorsa:
-    api_date_str = dt_obj.strftime("%Y%d%m") # YYYY + DD + MM (Örn: 20262709)
-    # Not: Eğer standart YYYYMMDD formatı gerekiyorsa burayı dt_obj.strftime("%Y%m%d") yapabilirsin.
-    
+    # Tarihi aralarında boşluk bırakmadan YYYYMMDD formatında oluşturuyoruz (Örn: 20260927)
+    api_date_str = dt_obj.strftime("%Y%m%d")
     gorunur_tarih = dt_obj.strftime("%Y-%m-%d")
 
     headers = {
@@ -164,11 +160,26 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     url = f"{config.BASE_URL}/football-get-matches-by-date?date={api_date_str}"
 
     try:
+        # İstek atıldığını ve hangi url/tarih ile atıldığını konsola basalım
+        print(f"🔍 İstek atılıyor -> URL: {url}")
         res = requests.get(url, headers=headers, timeout=25)
-        matches = api_yanitindan_maclari_ayikla(res.json()) if res.status_code == 200 else []
+        
+        # --- DEBUG BİLGİSİ TELEGRAM'A GÖNDERİLİYOR ---
+        status_code = res.status_code
+        raw_text = res.text[:500] # Çok uzunsa ilk 500 karakteri alalım
+        debug_info = f"🛠 <b>DEBUG BİLGİSİ</b>\n- URL: <code>{api_date_str}</code>\n- Status Code: <b>{status_code}</b>\n- Yanıt Özeti: <pre>{raw_text}</pre>"
+        telegram_post(debug_info, chat_id)
+        # ---------------------------------------------
+
+        if status_code != 200:
+            telegram_post(f"❌ API Hata Döndürdü! Kod: {status_code}", chat_id)
+            return
+
+        data = res.json()
+        matches = api_yanitindan_maclari_ayikla(data)
 
         if not matches:
-            telegram_post(f"⚠️ {gorunur_tarih} tarihi için API'den maç gelmedi (İstek Tarihi Formatı: {api_date_str}).", chat_id)
+            telegram_post(f"⚠️ {gorunur_tarih} tarihi için eşleşen maç bulunamadı. JSON yapısı eşleşmemiş olabilir.", chat_id)
             return
 
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
@@ -204,7 +215,9 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         telegram_post(msg, chat_id, markup)
 
     except Exception as e:
-        telegram_post(f"❌ İşlem Hatası: {e}", chat_id)
+        err_msg = f"❌ <b>Kritik Kod Hatası:</b>\n<code>{str(e)}</code>"
+        print(err_msg)
+        telegram_post(err_msg, chat_id)
 
 def yarin_bultenini_yukle(chat_id=None):
     yarin_tr = get_turkey_now() + timedelta(days=1)
