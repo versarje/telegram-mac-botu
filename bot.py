@@ -55,7 +55,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
     try:
         print(f"🔍 Oran analizi isteği atılıyor -> URL: {url}")
-        telegram_post("🔍 Oranlar API'den çekiliyor, oranlar ve kaynaklar CSV'ye işleniyor...", chat_id)
+        telegram_post("🔍 Oranlar ve karşılaşma verileri API'den alınıyor, rapor hazırlanıyor...", chat_id)
         
         res = requests.get(url, headers=headers, timeout=25)
         if res.status_code != 200:
@@ -65,6 +65,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         data = res.json()
         items = []
         
+        # API yanıt yapısını güvenli bir şekilde çözme
         if isinstance(data, dict):
             advantages_obj = data.get("advantages", {})
             if isinstance(advantages_obj, dict):
@@ -91,8 +92,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         
         with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f, delimiter=";")
-            # Sütun başlıklarını gerçek verilere göre anlamlı hale getirdik
-            writer.writerow(["ID", "Fırsat Türü", "Genel Değer / %", "Market / Pazar ID", "Bahis Sitesi 1 (Kaynak & Oran)", "Bahis Sitesi 2 (Kaynak & Oran)"])
+            # Tam ve açıklayıcı sütun başlıkları
+            writer.writerow(["ID", "Fırsat Türü", "Maç / Etkinlik Adı", "Lig / Organizasyon", "Değer / Oran (%)", "Bahis Bürosu ve Oranlar"])
             
             for idx, item in enumerate(items[:300], start=1):
                 if not isinstance(item, dict):
@@ -100,29 +101,54 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
                 
                 val_type = item.get("type", "ANALIZ")
                 val_oran = item.get("value", 0)
-                market = item.get("marketKey", "-")
                 
-                # Outcoming içindeki bahis sitelerini ve oranları (payout) ayıklıyoruz
+                # Maç adını olabilecek tüm olası JSON alanlarından güvenle çekelim
+                match_name = (
+                    item.get("eventName") or 
+                    item.get("name") or 
+                    item.get("matchName") or 
+                    item.get("match") or 
+                    item.get("fixtureName") or
+                    item.get("title")
+                )
+                
+                # Eğer yukarıdakiler boş gelirse, iç içe dict veya eventKey içinden kurtaralım
+                if not match_name:
+                    team_a = item.get("homeTeam") or item.get("home") or ""
+                    team_b = item.get("awayTeam") or item.get("away") or ""
+                    if team_a and team_b:
+                        match_name = f"{team_a} vs {team_b}"
+                    else:
+                        match_name = f"Etkinlik ID: {item.get('eventKey', item.get('id', 'Bilinmeyen'))}"
+
+                # Lig bilgisini yakalayalım
+                league_name = (
+                    item.get("leagueName") or 
+                    item.get("league") or 
+                    item.get("tournament") or 
+                    item.get("sport", "Genel")
+                )
+
+                # Outcoming (Bahis siteleri ve oran detayları)
                 outcomes = item.get("outcomes", [])
                 siteler = []
                 if isinstance(outcomes, list):
                     for out in outcomes:
                         if isinstance(out, dict):
-                            src = out.get("source", "Bilinmeyen")
-                            payout = out.get("payout", 0)
+                            src = out.get("source", "Büro")
+                            payout = out.get("payout", out.get("odds", 0))
                             try:
                                 payout_formatted = f"{float(payout):.2f}"
                             except:
                                 payout_formatted = str(payout)
                             siteler.append(f"{src}: {payout_formatted}")
                 
-                site1 = siteler[0] if len(siteler) > 0 else "-"
-                site2 = siteler[1] if len(siteler) > 1 else "-"
+                detay_siteler = " | ".join(siteler) if siteler else "Oran detayı yok"
 
-                writer.writerow([idx, val_type, val_oran, market, site1, site2])
+                writer.writerow([idx, val_type, match_name, league_name, val_oran, detay_siteler])
 
         print(f"✅ CSV dosyası başarıyla oluşturuldu: {filename}")
-        caption = f"📈 <b>Güncel Bahis Fırsatları Raporu</b>\nAPI'den çekilen <b>{min(len(items), 300)}</b> oran analizi detaylı olarak CSV'ye aktarıldı."
+        caption = f"📈 <b>Kesinleştirilmiş Bahis Analiz Raporu</b>\nAPI'den alınan <b>{min(len(items), 300)}</b> adet veri eksiksiz olarak raporlandı."
         
         telegram_send_document(filename, caption, chat_id)
 
@@ -132,7 +158,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             pass
 
     except Exception as e:
-        err_msg = f"❌ <b>Hata:</b>\n<code>{str(e)}</code>"
+        err_msg = f"❌ <b>Kritik Hata:</b>\n<code>{str(e)}</code>"
         print(err_msg)
         telegram_post(err_msg, chat_id)
 
