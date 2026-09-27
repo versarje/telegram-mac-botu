@@ -3,7 +3,6 @@ import csv
 import requests
 from datetime import datetime, timedelta, timezone
 import config
-from db import execute_d1, init_d1_db
 
 TURKEY_TZ = timezone(timedelta(hours=3))
 
@@ -47,49 +46,7 @@ def telegram_send_document(file_path, caption="", chat_id=None):
     except Exception as e:
         print(f"❌ Telegram dosya gönderim hatası: {e}")
 
-def csv_dosyasi_olustur_ve_gonder(chat_id=None):
-    init_d1_db()
-    maclar = execute_d1("SELECT * FROM maclar") or []
-    print(f"📊 Veritabanından çekilen kayıt sayısı (CSV için): {len(maclar)}")
-
-    if not maclar:
-        telegram_post("📊 Veritabanında dışa aktarılacak veri bulunamadı.", chat_id)
-        return
-
-    filename = f"Bahis_Analizleri_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
-    try:
-        with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f, delimiter=";")
-            writer.writerow(["ID", "Zaman", "Ev Sahibi / Maç", "Deplasman / Pazar", "Kategori", "Tahmin / Detay"])
-            
-            for idx, m in enumerate(maclar, start=1):
-                writer.writerow([
-                    m.get("id", idx),
-                    m.get("saat", "Analiz"),
-                    m.get("ev_sahibi", ""),
-                    m.get("deplasman", ""),
-                    m.get("lig", ""),
-                    m.get("tahmin", "")
-                ])
-        print(f"✅ CSV dosyası başarıyla oluşturuldu: {filename}")
-    except Exception as e:
-        err_str = f"❌ CSV yazma hatası: {e}"
-        print(err_str)
-        telegram_post(err_str, chat_id)
-        return
-
-    caption = f"📈 <b>Güncel Bahis Fırsatları Raporu</b>\nToplam <b>{len(maclar)}</b> analiz CSV olarak dışa aktarıldı."
-    telegram_send_document(filename, caption, chat_id)
-
-    try:
-        os.remove(filename)
-    except:
-        pass
-
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
-    init_d1_db()
-    
     url = f"{config.BASE_URL}/v1/advantages/"
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
@@ -98,64 +55,73 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
     try:
         print(f"🔍 Oran analizi isteği atılıyor -> URL: {url}")
-        res = requests.get(url, headers=headers, timeout=25)
+        telegram_post("🔍 Oran analizi API'den çekiliyor, CSV raporu hazırlanıyor...", chat_id)
         
+        res = requests.get(url, headers=headers, timeout=25)
         status_code = res.status_code
-        raw_text = res.text[:400]
-        print(f"📥 API Yanıt Kodu: {status_code}, İçerik: {raw_text}")
-
+        
         if status_code != 200:
             telegram_post(f"❌ Oran API Hata Döndürdü! Kod: {status_code}", chat_id)
             return
 
         data = res.json()
-        
         items = []
+        
         if isinstance(data, dict):
             advantages_obj = data.get("advantages", {})
-            print(f"🔍 advantages objesi tipi: {type(advantages_obj)}")
             if isinstance(advantages_obj, dict):
-                for key, val in advantages_obj.items():
-                    print(f"🔑 Anahtar: {key}, Değer Tipi: {type(val)}, Uzunluk: {len(val) if isinstance(val, list) else 'Liste değil'}")
+                for key in ["ARBITRAGE", "PLUS_EV_AVERAGE", "PLUS_EV_PINNACLE"]:
+                    val = advantages_obj.get(key)
                     if isinstance(val, list):
                         items.extend(val)
+                if not items:
+                    for key, val in advantages_obj.items():
+                        if isinstance(val, list):
+                            items.extend(val)
             elif isinstance(advantages_obj, list):
                 items = advantages_obj
         elif isinstance(data, list):
             items = data
 
-        print(f"📦 Toplam işlenecek item sayısı: {len(items)}")
+        print(f"📦 İşlenecek toplam item sayısı: {len(items)}")
 
         if not items:
-            telegram_post("⚠️ API'den yanıt alındı ancak avantaj içeriği boş veya listeye çevrilemedi.", chat_id)
+            telegram_post("⚠️ API'den yanıt alındı ancak uygun içerik bulunamadı.", chat_id)
             return
 
-        yeni_eklenen = 0
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            
-            val_type = item.get("type", "ANALIZ")
-            val_oran = item.get("value", 0)
-            market = item.get("marketKey", "Genel Pazar")
-            event_id = item.get("eventKey", "Bilinmeyen")
-            
-            lig = f"Tür: {val_type}"
-            ev = f"Maç ID: {event_id[:12]}" if event_id else "Maç"
-            dep = f"Pazar: {market[:12]}" if market else "Pazar"
-            detay = f"Değer: {val_oran}"
-
-            execute_d1(
-                "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
-                ["Analiz", str(ev), str(dep), str(lig), str(detay)]
-            )
-            yeni_eklenen += 1
-
-        print(f"✅ Veritabanına eklenen kayıt: {yeni_eklenen}")
-        telegram_post(f"✅ <b>Analizler İşlendi!</b> ➕ <b>{yeni_eklenen}</b> kayıt eklendi. CSV raporu hazırlanıyor...", chat_id)
+        # Doğrudan CSV dosyası oluştur
+        filename = f"Bahis_Analizleri_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         
-        # CSV dosyasını oluşturup gönder
-        csv_dosyasi_olustur_ve_gonder(chat_id)
+        with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";")
+            writer.writerow(["ID", "Zaman", "Ev Sahibi / Maç", "Deplasman / Pazar", "Kategori", "Tahmin / Detay"])
+            
+            for idx, item in enumerate(items[:300], start=1): # İlk 300 temiz veri
+                if not isinstance(item, dict):
+                    continue
+                
+                val_type = item.get("type", "ANALIZ")
+                val_oran = item.get("value", 0)
+                market = item.get("marketKey", "Genel Pazar")
+                event_id = item.get("eventKey", "Bilinmeyen")
+                
+                lig = f"Tür: {val_type}"
+                ev = f"Maç ID: {event_id[:12]}" if event_id else "Maç"
+                dep = f"Pazar: {market[:12]}" if market else "Pazar"
+                detay = f"Değer: {val_oran}"
+
+                writer.writerow([idx, "Analiz", ev, dep, lig, detay])
+
+        print(f"✅ CSV dosyası başarıyla oluşturuldu: {filename}")
+        caption = f"📈 <b>Güncel Bahis Fırsatları Raporu</b>\nAPI'den anlık çekilen <b>{min(len(items), 300)}</b> analiz doğrudan CSV olarak aktarıldı."
+        
+        telegram_send_document(filename, caption, chat_id)
+
+        # Geçici dosyayı temizle
+        try:
+            os.remove(filename)
+        except:
+            pass
 
     except Exception as e:
         err_msg = f"❌ <b>Veri İşleme Kritik Hatası:</b>\n<code>{str(e)}</code>"
