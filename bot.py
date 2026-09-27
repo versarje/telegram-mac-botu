@@ -64,8 +64,8 @@ def get_paginated_matches_message(page=0, page_size=5):
     for m in maclar:
         ev = m.get("ev_sahibi", "Ev Sahibi")
         dep = m.get("deplasman", "Deplasman")
-        saat = m.get("saat", "Canlı/Yakında")
-        lig = m.get("lig", "Analiz")
+        saat = m.get("saat", "Analiz")
+        lig = m.get("lig", "Bahis Analizi")
         tahmin = m.get("tahmin", "Değerli Oran")
         
         mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev} vs {dep}\n💡 Fırsat/Analiz: <b>{tahmin}</b>\n-------------------\n"
@@ -84,10 +84,8 @@ def get_paginated_matches_message(page=0, page_size=5):
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
     
-    # Sportsbook API Oran Analizi (Odds Insights) Endpoint'i
-    # type parametresi olarak PLUS_EV_AVERAGE veya ARBITRAGE kullanabiliriz[span_1](start_span)[span_1](end_span)
     analiz_turu = "PLUS_EV_AVERAGE" 
-    url = f"{config.BASE_URL}/v0/advantages/?type={analiz_turu}"
+    url = f"{config.BASE_URL}/v1/advantages/?type={analiz_turu}"
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
@@ -99,9 +97,8 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         res = requests.get(url, headers=headers, timeout=25)
         
         status_code = res.status_code
-        raw_text = res.text[:400] # Debug için ilk 400 karakter
+        raw_text = res.text[:400]
         
-        # Debug bilgisini Telegram'a basalım ki dönen yapıyı net görebilelim
         debug_info = f"🛠 <b>ORAN API DEBUG</b>\n- Status Code: <b>{status_code}</b>\n- Yanıt Özeti: <pre>{raw_text}</pre>"
         telegram_post(debug_info, chat_id)
 
@@ -111,17 +108,23 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
         data = res.json()
         
-        # Gelen veriyi liste veya sözlük yapısına göre ele alıyoruz
+        # Gelen JSON şemasına (advantages -> items) göre verileri ayıklıyoruz
         items = []
-        if isinstance(data, list):
+        if isinstance(data, dict):
+            advantages_obj = data.get("advantages", {})
+            if isinstance(advantages_obj, dict):
+                raw_items = advantages_obj.get("items", [])
+                if isinstance(raw_items, list):
+                    items = raw_items
+                elif isinstance(raw_items, dict):
+                    items = [raw_items]
+            elif isinstance(advantages_obj, list):
+                items = advantages_obj
+        elif isinstance(data, list):
             items = data
-        elif isinstance(data, dict):
-            items = data.get("response", []) or data.get("data", []) or data.get("advantages", [])
-            if not items and "result" in data:
-                items = data["result"]
 
         if not items:
-            telegram_post("⚠️ API'den analiz verisi döndü ancak liste boş veya farklı bir formatta.", chat_id)
+            telegram_post("⚠️ API'den yanıt alındı ancak 'items' listesi boş veya farklı yapıda.", chat_id)
             return
 
         yeni_eklenen = 0
@@ -129,25 +132,28 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             if not isinstance(item, dict):
                 continue
             
-            # Gelen yapıya göre takım ve oran bilgilerini ayıklıyoruz
-            ev = item.get("homeTeam", "") or item.get("home", "Ev Sahibi")
-            dep = item.get("awayTeam", "") or item.get("away", "Deplasman")
-            lig = item.get("league", "") or item.get("sport", "Futbol Analiz")
-            detay = item.get("description", "") or item.get("edge", "Değerli Oran Fırsatı")
+            val_type = item.get("type", "EV")
+            val_oran = item.get("value", 0)
+            market = item.get("marketKey", "Genel Pazar")
+            event_id = item.get("eventKey", "Bilinmeyen Maç")
             
-            # Veritabanına kaydedelim
+            lig = "Bahis Analizi"
+            ev = f"Maç ID: {event_id[:8]}" if event_id else "Ev Sahibi"
+            dep = f"Pazar: {market}" if market else "Deplasman"
+            detay = f"Tür: {val_type} | Oran/Değer: {val_oran}"
+
             execute_d1(
                 "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
                 ["Analiz", str(ev), str(dep), str(lig), str(detay)]
             )
             yeni_eklenen += 1
 
-        telegram_post(f"✅ <b>Oran Analizleri Yüklendi!</b> ➕ <b>{yeni_eklenen}</b> yeni fırsat eklendi.", chat_id)
+        telegram_post(f"✅ <b>Avantaj Analizleri Yüklendi!</b> ➕ <b>{yeni_eklenen}</b> fırsat işlendi.", chat_id)
         msg, markup = get_paginated_matches_message(0)
         telegram_post(msg, chat_id, markup)
 
     except Exception as e:
-        err_msg = f"❌ <b>Oran Analizi Kritik Hata:</b>\n<code>{str(e)}</code>"
+        err_msg = f"❌ <b>Veri İşleme Kritik Hatası:</b>\n<code>{str(e)}</code>"
         print(err_msg)
         telegram_post(err_msg, chat_id)
 
