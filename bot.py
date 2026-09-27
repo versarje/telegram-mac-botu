@@ -149,7 +149,12 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     if not dt_obj:
         dt_obj = get_turkey_now()
     
-    api_date_str = dt_obj.strftime("%Y%m%d")
+    # Tarihi aralarında boşluk bırakmadan istenen formatta düzenliyoruz (Örn: 20272709 -> yıl + gün + ay veya standart YYYYMMDD)
+    # Eğer API tam olarak YYYYMMDD (Yıl Ay Gün) bekliyorsa strftime("%Y%m%d") kullanılır.
+    # Örnek verdiğin format (Yıl + Gün + Ay sırasıyla) isteniyorsa:
+    api_date_str = dt_obj.strftime("%Y%d%m") # YYYY + DD + MM (Örn: 20262709)
+    # Not: Eğer standart YYYYMMDD formatı gerekiyorsa burayı dt_obj.strftime("%Y%m%d") yapabilirsin.
+    
     gorunur_tarih = dt_obj.strftime("%Y-%m-%d")
 
     headers = {
@@ -163,7 +168,7 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
         matches = api_yanitindan_maclari_ayikla(res.json()) if res.status_code == 200 else []
 
         if not matches:
-            telegram_post(f"⚠️ {gorunur_tarih} tarihi için API'den maç gelmedi.", chat_id)
+            telegram_post(f"⚠️ {gorunur_tarih} tarihi için API'den maç gelmedi (İstek Tarihi Formatı: {api_date_str}).", chat_id)
             return
 
         mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
