@@ -2,6 +2,8 @@ import os
 import random
 import requests
 from datetime import datetime, timedelta, timezone
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import config
 from db import execute_d1, init_d1_db
 
@@ -31,61 +33,102 @@ def telegram_post(text, chat_id=None, reply_markup=None):
     except Exception as e:
         print(f"❌ Telegram gönderim hatası: {e}")
 
-def telegram_edit_message(chat_id, message_id, text, reply_markup=None):
-    if not config.TELEGRAM_BOT_TOKEN:
+def telegram_send_document(file_path, caption="", chat_id=None):
+    target_chat_id = chat_id or config.TELEGRAM_CHAT_ID
+    if not target_chat_id or not config.TELEGRAM_BOT_TOKEN:
         return
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/editMessageText"
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"❌ Telegram edit hatası: {e}")
 
-def get_paginated_matches_message(page=0, page_size=5):
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, "rb") as f:
+            files = {"document": f}
+            data = {"chat_id": target_chat_id, "caption": caption, "parse_mode": "HTML"}
+            requests.post(url, data=data, files=files, timeout=30)
+    except Exception as e:
+        print(f"❌ Telegram dosya gönderim hatası: {e}")
+
+def excel_dosyasi_olustur_ve_gonder(chat_id=None):
     init_d1_db()
-    offset = page * page_size
-    maclar = execute_d1(f"SELECT * FROM maclar LIMIT {page_size} OFFSET {offset}") or []
-    total_res = execute_d1("SELECT COUNT(*) as cnt FROM maclar")
-    total = total_res[0]['cnt'] if total_res else 0
-    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    maclar = execute_d1("SELECT * FROM maclar") or []
 
     if not maclar:
-        return "📊 Veritabanında kaydedilmiş oran analizi bulunamadı. Güncellemek için /güncelle yazabilirsiniz.", None
+        telegram_post("📊 Veritabanında dışa aktarılacak oran analizi bulunamadı.", chat_id)
+        return
 
-    mesaj = f"📊 <b>BAHİS ORAN ANALİZLERİ (Sayfa {page+1}/{total_pages})</b>\n\n"
-    for m in maclar:
-        ev = m.get("ev_sahibi", "Ev Sahibi")
-        dep = m.get("deplasman", "Deplasman")
-        saat = m.get("saat", "Analiz")
-        lig = m.get("lig", "Bahis Analizi")
-        tahmin = m.get("tahmin", "Değerli Oran")
+    # Excel Workbook oluşturma
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Bahis Analizleri"
+
+    # Tablo Başlıkları
+    headers = ["ID", "Zaman / Saat", "Ev Sahibi / Maç", "Deplasman / Pazar", "Lig / Kategori", "Tahmin / Detay"]
+    ws.append(headers)
+
+    # Başlık Stili (Koyu Gri Zemin, Beyaz Kalın Harfler)
+    header_fill = PatternFill(start_color="333333", end_color="333333", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    align_center = Alignment(horizontal="center", vertical="center")
+
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = align_center
+
+    ws.row_dimensions[1].height = 25
+
+    # Verileri Yazdırma
+    thin_border = Border(
+        left=Side(style='thin', color='DDDDDD'),
+        right=Side(style='thin', color='DDDDDD'),
+        top=Side(style='thin', color='DDDDDD'),
+        bottom=Side(style='thin', color='DDDDDD')
+    )
+
+    for idx, m in enumerate(maclar, start=2):
+        row_data = [
+            m.get("id", idx-1),
+            m.get("saat", "Analiz"),
+            m.get("ev_sahibi", ""),
+            m.get("deplasman", ""),
+            m.get("lig", ""),
+            m.get("tahmin", "")
+        ]
+        ws.append(row_data)
         
-        mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev} vs {dep}\n💡 Fırsat/Analiz: <b>{tahmin}</b>\n-------------------\n"
+        ws.row_dimensions[idx].height = 20
+        for col_num in range(1, len(headers) + 1):
+            cell = ws.cell(row=idx, column=col_num)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="left", vertical="center")
 
-    keyboard = {"inline_keyboard": []}
-    row = []
-    if page > 0:
-        row.append({"text": "⬅️ Önceki", "callback_data": f"page_{page-1}"})
-    if (page + 1) < total_pages:
-        row.append({"text": "Sonraki ➡️", "callback_data": f"page_{page+1}"})
-    if row:
-        keyboard["inline_keyboard"].append(row)
+    # Sütun Genişliklerini Otomatik Ayarlama
+    for col in ws.columns:
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 5, 15)
 
-    return mesaj, keyboard
+    # Gridlines Açık Tutma
+    ws.views.sheetView[0].showGridLines = True
+
+    # Dosyayı Kaydetme
+    filename = f"Bahis_Analizleri_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(filename)
+
+    # Telegram üzerinden kullanıcıya dosya olarak gönderme
+    caption = f"📈 <b>Güncel Bahis Oran Analizleri Raporu</b>\nToplam <b>{len(maclar)}</b> fırsat Excel olarak dışa aktarıldı."
+    telegram_send_document(filename, caption, chat_id)
+
+    # Gönderim sonrası yerel dosyayı temizleme
+    try:
+        os.remove(filename)
+    except:
+        pass
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
     
-    analiz_turu = "PLUS_EV_AVERAGE" 
-    url = f"{config.BASE_URL}/v1/advantages/?type={analiz_turu}"
+    url = f"{config.BASE_URL}/v1/advantages/"
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
@@ -108,24 +151,20 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
         data = res.json()
         
-        # Şemaya uygun olarak advantages nesnesi altındaki dinamik diziyi yakalıyoruz
         items = []
         if isinstance(data, dict):
             advantages_obj = data.get("advantages", {})
             if isinstance(advantages_obj, dict):
-                if analiz_turu in advantages_obj:
-                    items = advantages_obj.get(analiz_turu, [])
-                else:
-                    keys = list(advantages_obj.keys())
-                    if keys:
-                        items = advantages_obj.get(keys[0], [])
+                for key, val in advantages_obj.items():
+                    if isinstance(val, list):
+                        items.extend(val)
             elif isinstance(advantages_obj, list):
                 items = advantages_obj
         elif isinstance(data, list):
             items = data
 
         if not items:
-            telegram_post("⚠️ API'den yanıt alındı ancak advantages içeriği boş.", chat_id)
+            telegram_post("⚠️ API'den yanıt alındı ancak advantages içeriği boş veya şemaya uymuyor.", chat_id)
             return
 
         yeni_eklenen = 0
@@ -150,9 +189,10 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             )
             yeni_eklenen += 1
 
-        telegram_post(f"✅ <b>Avantaj Analizleri Yüklendi!</b> ➕ <b>{yeni_eklenen}</b> fırsat işlendi.", chat_id)
-        msg, markup = get_paginated_matches_message(0)
-        telegram_post(msg, chat_id, markup)
+        telegram_post(f"✅ <b>Avantaj Analizleri Yüklendi!</b> ➕ <b>{yeni_eklenen}</b> fırsat veritabanına eklendi. Excel raporu hazırlanıyor...", chat_id)
+        
+        # Sayfalandırma kaldırıldı, doğrudan Excel dosyası oluşturulup gönderiliyor
+        excel_dosyasi_olustur_ve_gonder(chat_id)
 
     except Exception as e:
         err_msg = f"❌ <b>Veri İşleme Kritik Hatası:</b>\n<code>{str(e)}</code>"
