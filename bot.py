@@ -55,13 +55,11 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
     try:
         print(f"🔍 Oran analizi isteği atılıyor -> URL: {url}")
-        telegram_post("🔍 Oran analizi API'den çekiliyor, CSV raporu hazırlanıyor...", chat_id)
+        telegram_post("🔍 Oranlar API'den çekiliyor, oranlar ve kaynaklar CSV'ye işleniyor...", chat_id)
         
         res = requests.get(url, headers=headers, timeout=25)
-        status_code = res.status_code
-        
-        if status_code != 200:
-            telegram_post(f"❌ Oran API Hata Döndürdü! Kod: {status_code}", chat_id)
+        if res.status_code != 200:
+            telegram_post(f"❌ Oran API Hata Döndürdü! Kod: {res.status_code}", chat_id)
             return
 
         data = res.json()
@@ -89,42 +87,52 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             telegram_post("⚠️ API'den yanıt alındı ancak uygun içerik bulunamadı.", chat_id)
             return
 
-        # Doğrudan CSV dosyası oluştur
         filename = f"Bahis_Analizleri_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         
         with open(filename, mode="w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f, delimiter=";")
-            writer.writerow(["ID", "Zaman", "Ev Sahibi / Maç", "Deplasman / Pazar", "Kategori", "Tahmin / Detay"])
+            # Sütun başlıklarını gerçek verilere göre anlamlı hale getirdik
+            writer.writerow(["ID", "Fırsat Türü", "Genel Değer / %", "Market / Pazar ID", "Bahis Sitesi 1 (Kaynak & Oran)", "Bahis Sitesi 2 (Kaynak & Oran)"])
             
-            for idx, item in enumerate(items[:300], start=1): # İlk 300 temiz veri
+            for idx, item in enumerate(items[:300], start=1):
                 if not isinstance(item, dict):
                     continue
                 
                 val_type = item.get("type", "ANALIZ")
                 val_oran = item.get("value", 0)
-                market = item.get("marketKey", "Genel Pazar")
-                event_id = item.get("eventKey", "Bilinmeyen")
+                market = item.get("marketKey", "-")
                 
-                lig = f"Tür: {val_type}"
-                ev = f"Maç ID: {event_id[:12]}" if event_id else "Maç"
-                dep = f"Pazar: {market[:12]}" if market else "Pazar"
-                detay = f"Değer: {val_oran}"
+                # Outcoming içindeki bahis sitelerini ve oranları (payout) ayıklıyoruz
+                outcomes = item.get("outcomes", [])
+                siteler = []
+                if isinstance(outcomes, list):
+                    for out in outcomes:
+                        if isinstance(out, dict):
+                            src = out.get("source", "Bilinmeyen")
+                            payout = out.get("payout", 0)
+                            try:
+                                payout_formatted = f"{float(payout):.2f}"
+                            except:
+                                payout_formatted = str(payout)
+                            siteler.append(f"{src}: {payout_formatted}")
+                
+                site1 = siteler[0] if len(siteler) > 0 else "-"
+                site2 = siteler[1] if len(siteler) > 1 else "-"
 
-                writer.writerow([idx, "Analiz", ev, dep, lig, detay])
+                writer.writerow([idx, val_type, val_oran, market, site1, site2])
 
         print(f"✅ CSV dosyası başarıyla oluşturuldu: {filename}")
-        caption = f"📈 <b>Güncel Bahis Fırsatları Raporu</b>\nAPI'den anlık çekilen <b>{min(len(items), 300)}</b> analiz doğrudan CSV olarak aktarıldı."
+        caption = f"📈 <b>Güncel Bahis Fırsatları Raporu</b>\nAPI'den çekilen <b>{min(len(items), 300)}</b> oran analizi detaylı olarak CSV'ye aktarıldı."
         
         telegram_send_document(filename, caption, chat_id)
 
-        # Geçici dosyayı temizle
         try:
             os.remove(filename)
         except:
             pass
 
     except Exception as e:
-        err_msg = f"❌ <b>Veri İşleme Kritik Hatası:</b>\n<code>{str(e)}</code>"
+        err_msg = f"❌ <b>Hata:</b>\n<code>{str(e)}</code>"
         print(err_msg)
         telegram_post(err_msg, chat_id)
 
