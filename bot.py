@@ -49,66 +49,6 @@ def telegram_edit_message(chat_id, message_id, text, reply_markup=None):
     except Exception as e:
         print(f"❌ Telegram edit hatası: {e}")
 
-def metin_veya_sozlukten_al(veri, anahtar="name"):
-    if isinstance(veri, dict):
-        return veri.get(anahtar, "") or veri.get("shortName", "") or veri.get("longName", "")
-    elif isinstance(veri, str):
-        return veri
-    return ""
-
-def turkcelestir(metin, tur="takim"):
-    if not metin:
-        return metin
-    duzeltmeler = {
-        " FC": "", " FK": "", " SK": "", " SC": "",
-        "United": "Utd", "City": "City", "Real": "Real"
-    }
-    for k, v in duzeltmeler.items():
-        metin = metin.replace(k, v)
-    return metin.strip()
-
-def timestamp_saate_cevir(ts, time_str=None):
-    if time_str and ":" in str(time_str):
-        parcalar = str(time_str).split()
-        if len(parcalar) >= 2 and ":" in parcalar[1]:
-            return parcalar[1][:5]
-            
-    if not ts:
-        return "00:00"
-    try:
-        ts_int = int(ts)
-        if ts_int > 100000000000:
-            ts_int = ts_int // 1000
-
-        dt = datetime.fromtimestamp(ts_int, tz=timezone.utc).astimezone(TURKEY_TZ)
-        return dt.strftime("%H:%M")
-    except Exception as e:
-        return "00:00"
-
-def rastgele_tahmin_uret():
-    tahminler = [
-        "⚽ MS 1", "⚽ MS 2", "🤝 MS X",
-        "🔥 KG VAR", "🛡️ KG YOK",
-        "🍿 2.5 ÜST", "🔒 2.5 ALT"
-    ]
-    return random.choice(tahminler)
-
-def api_yanitindan_maclari_ayikla(data):
-    if not isinstance(data, dict):
-        return []
-    
-    response_obj = data.get("response", {})
-    if isinstance(response_obj, dict):
-        matches = response_obj.get("matches", [])
-        if isinstance(matches, list):
-            return matches
-            
-    matches_direct = data.get("matches", [])
-    if isinstance(matches_direct, list):
-        return matches_direct
-
-    return []
-
 def get_paginated_matches_message(page=0, page_size=5):
     init_d1_db()
     offset = page * page_size
@@ -118,20 +58,17 @@ def get_paginated_matches_message(page=0, page_size=5):
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
 
     if not maclar:
-        return "📊 Veritabanında gösterilecek maç bulunamadı.", None
+        return "📊 Veritabanında kaydedilmiş oran analizi bulunamadı. Güncellemek için /güncelle yazabilirsiniz.", None
 
-    mesaj = f"⚽ <b>BÜLTEN VE SKORLAR (Sayfa {page+1}/{total_pages})</b>\n\n"
+    mesaj = f"📊 <b>BAHİS ORAN ANALİZLERİ (Sayfa {page+1}/{total_pages})</b>\n\n"
     for m in maclar:
-        ev = m.get("ev_sahibi", "")
-        dep = m.get("deplasman", "")
-        saat = m.get("saat", "00:00")
-        lig = m.get("lig", "")
-        tahmin = m.get("tahmin", "")
-        ev_s = m.get("ev_skor")
-        dep_s = m.get("dep_skor")
+        ev = m.get("ev_sahibi", "Ev Sahibi")
+        dep = m.get("deplasman", "Deplasman")
+        saat = m.get("saat", "Canlı/Yakında")
+        lig = m.get("lig", "Analiz")
+        tahmin = m.get("tahmin", "Değerli Oran")
         
-        skor_str = f" <b>[{ev_s} - {dep_s}]</b>" if ev_s is not None and dep_s is not None else " (Oynanmadı)"
-        mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev} vs {dep}{skor_str}\n💡 Tahmin: <b>{tahmin}</b>\n-------------------\n"
+        mesaj += f"🏆 <b>{lig}</b>\n⏰ {saat} | {ev} vs {dep}\n💡 Fırsat/Analiz: <b>{tahmin}</b>\n-------------------\n"
 
     keyboard = {"inline_keyboard": []}
     row = []
@@ -146,79 +83,73 @@ def get_paginated_matches_message(page=0, page_size=5):
 
 def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
     init_d1_db()
-    if not dt_obj:
-        dt_obj = get_turkey_now()
     
-    # Tarihi aralarında boşluk bırakmadan YYYYMMDD formatında oluşturuyoruz (Örn: 20260927)
-    api_date_str = dt_obj.strftime("%Y%m%d")
-    gorunur_tarih = dt_obj.strftime("%Y-%m-%d")
+    # Sportsbook API Oran Analizi (Odds Insights) Endpoint'i
+    # type parametresi olarak PLUS_EV_AVERAGE veya ARBITRAGE kullanabiliriz[span_1](start_span)[span_1](end_span)
+    analiz_turu = "PLUS_EV_AVERAGE" 
+    url = f"{config.BASE_URL}/v0/advantages/?type={analiz_turu}"
 
     headers = {
         "x-rapidapi-key": config.RAPIDAPI_KEY,
         "x-rapidapi-host": config.RAPIDAPI_HOST
     }
-    url = f"{config.BASE_URL}/football-get-matches-by-date?date={api_date_str}"
 
     try:
-        # İstek atıldığını ve hangi url/tarih ile atıldığını konsola basalım
-        print(f"🔍 İstek atılıyor -> URL: {url}")
+        print(f"🔍 Oran analizi isteği atılıyor -> URL: {url}")
         res = requests.get(url, headers=headers, timeout=25)
         
-        # --- DEBUG BİLGİSİ TELEGRAM'A GÖNDERİLİYOR ---
         status_code = res.status_code
-        raw_text = res.text[:500] # Çok uzunsa ilk 500 karakteri alalım
-        debug_info = f"🛠 <b>DEBUG BİLGİSİ</b>\n- URL: <code>{api_date_str}</code>\n- Status Code: <b>{status_code}</b>\n- Yanıt Özeti: <pre>{raw_text}</pre>"
+        raw_text = res.text[:400] # Debug için ilk 400 karakter
+        
+        # Debug bilgisini Telegram'a basalım ki dönen yapıyı net görebilelim
+        debug_info = f"🛠 <b>ORAN API DEBUG</b>\n- Status Code: <b>{status_code}</b>\n- Yanıt Özeti: <pre>{raw_text}</pre>"
         telegram_post(debug_info, chat_id)
-        # ---------------------------------------------
 
         if status_code != 200:
-            telegram_post(f"❌ API Hata Döndürdü! Kod: {status_code}", chat_id)
+            telegram_post(f"❌ Oran API Hata Döndürdü! Kod: {status_code}", chat_id)
             return
 
         data = res.json()
-        matches = api_yanitindan_maclari_ayikla(data)
+        
+        # Gelen veriyi liste veya sözlük yapısına göre ele alıyoruz
+        items = []
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("response", []) or data.get("data", []) or data.get("advantages", [])
+            if not items and "result" in data:
+                items = data["result"]
 
-        if not matches:
-            telegram_post(f"⚠️ {gorunur_tarih} tarihi için eşleşen maç bulunamadı. JSON yapısı eşleşmemiş olabilir.", chat_id)
+        if not items:
+            telegram_post("⚠️ API'den analiz verisi döndü ancak liste boş veya farklı bir formatta.", chat_id)
             return
 
-        mevcut_maclar_raw = execute_d1("SELECT ev_sahibi, deplasman FROM maclar") or []
-        mevcut_set = {(m['ev_sahibi'], m['deplasman']) for m in mevcut_maclar_raw}
-
         yeni_eklenen = 0
-        for m in matches:
-            if not isinstance(m, dict):
+        for item in items:
+            if not isinstance(item, dict):
                 continue
-            home_obj = m.get("home", {})
-            away_obj = m.get("away", {})
             
-            ev = turkcelestir(metin_veya_sozlukten_al(home_obj, "name"), "takim")
-            dep = turkcelestir(metin_veya_sozlukten_al(away_obj, "name"), "takim")
+            # Gelen yapıya göre takım ve oran bilgilerini ayıklıyoruz
+            ev = item.get("homeTeam", "") or item.get("home", "Ev Sahibi")
+            dep = item.get("awayTeam", "") or item.get("away", "Deplasman")
+            lig = item.get("league", "") or item.get("sport", "Futbol Analiz")
+            detay = item.get("description", "") or item.get("edge", "Değerli Oran Fırsatı")
+            
+            # Veritabanına kaydedelim
+            execute_d1(
+                "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
+                ["Analiz", str(ev), str(dep), str(lig), str(detay)]
+            )
+            yeni_eklenen += 1
 
-            if not ev or not dep:
-                continue
-
-            saat = timestamp_saate_cevir(m.get("timeTS"), m.get("time"))
-            lig = turkcelestir(metin_veya_sozlukten_al(m.get("tournament", {}), "name") or "Futbol", "lig")
-
-            if (ev, dep) not in mevcut_set:
-                tahmin = rastgele_tahmin_uret()
-                execute_d1(
-                    "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
-                    [saat, ev, dep, lig, tahmin]
-                )
-                mevcut_set.add((ev, dep))
-                yeni_eklenen += 1
-
-        telegram_post(f"✅ <b>{gorunur_tarih}</b> bülteni yüklendi: ➕ <b>{yeni_eklenen}</b> yeni maç eklendi.", chat_id)
+        telegram_post(f"✅ <b>Oran Analizleri Yüklendi!</b> ➕ <b>{yeni_eklenen}</b> yeni fırsat eklendi.", chat_id)
         msg, markup = get_paginated_matches_message(0)
         telegram_post(msg, chat_id, markup)
 
     except Exception as e:
-        err_msg = f"❌ <b>Kritik Kod Hatası:</b>\n<code>{str(e)}</code>"
+        err_msg = f"❌ <b>Oran Analizi Kritik Hata:</b>\n<code>{str(e)}</code>"
         print(err_msg)
         telegram_post(err_msg, chat_id)
 
 def yarin_bultenini_yukle(chat_id=None):
-    yarin_tr = get_turkey_now() + timedelta(days=1)
-    bulteni_apiden_veritabanina_yukle(chat_id=chat_id, dt_obj=yarin_tr)
+    bulteni_apiden_veritabanina_yukle(chat_id=chat_id)
