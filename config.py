@@ -2,7 +2,7 @@ import os
 
 # RapidAPI & Telegram
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "a218c708b2msh4439e269a1c67ebp1a33c8jsnb1f2b991cb2a")
-RAPIDAPI_HOST = "free-api-live-football-data.p.rapidapi.com"
+RAPIDAPI_HOST = "sportsbook-api2.p.rapidapi.com"
 BASE_URL = f"https://{RAPIDAPI_HOST}"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8")
