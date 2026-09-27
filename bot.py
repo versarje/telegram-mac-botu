@@ -108,23 +108,24 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
 
         data = res.json()
         
-        # Gelen JSON şemasına (advantages -> items) göre verileri ayıklıyoruz
+        # Şemaya uygun olarak advantages nesnesi altındaki dinamik diziyi yakalıyoruz
         items = []
         if isinstance(data, dict):
             advantages_obj = data.get("advantages", {})
             if isinstance(advantages_obj, dict):
-                raw_items = advantages_obj.get("items", [])
-                if isinstance(raw_items, list):
-                    items = raw_items
-                elif isinstance(raw_items, dict):
-                    items = [raw_items]
+                if analiz_turu in advantages_obj:
+                    items = advantages_obj.get(analiz_turu, [])
+                else:
+                    keys = list(advantages_obj.keys())
+                    if keys:
+                        items = advantages_obj.get(keys[0], [])
             elif isinstance(advantages_obj, list):
                 items = advantages_obj
         elif isinstance(data, list):
             items = data
 
         if not items:
-            telegram_post("⚠️ API'den yanıt alındı ancak 'items' listesi boş veya farklı yapıda.", chat_id)
+            telegram_post("⚠️ API'den yanıt alındı ancak advantages içeriği boş.", chat_id)
             return
 
         yeni_eklenen = 0
@@ -134,13 +135,14 @@ def bulteni_apiden_veritabanina_yukle(chat_id=None, dt_obj=None):
             
             val_type = item.get("type", "EV")
             val_oran = item.get("value", 0)
+            val_type_str = item.get("valueType", "")
             market = item.get("marketKey", "Genel Pazar")
             event_id = item.get("eventKey", "Bilinmeyen Maç")
             
-            lig = "Bahis Analizi"
-            ev = f"Maç ID: {event_id[:8]}" if event_id else "Ev Sahibi"
-            dep = f"Pazar: {market}" if market else "Deplasman"
-            detay = f"Tür: {val_type} | Oran/Değer: {val_oran}"
+            lig = "Değerli Oran (Plus EV)"
+            ev = f"ID: {event_id[:10]}..." if event_id else "Maç"
+            dep = f"Pazar: {market[:15]}..." if market else "Pazar"
+            detay = f"Tür: {val_type} | Değer: {val_oran} ({val_type_str})"
 
             execute_d1(
                 "INSERT INTO maclar (saat, ev_sahibi, deplasman, lig, tahmin) VALUES (?, ?, ?, ?, ?)",
