@@ -14,7 +14,6 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
-# Groq İstemcisi (Render'da GROQ_API_KEY olmalı)
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 hafiza_maclar = []
@@ -224,7 +223,6 @@ def t2_canli_analiz_gonder(chat_id):
         except:
             yorumlar = "Canlı analiz şu an üretilemedi."
 
-        # Telegram karakter sınırını aşmaması için parçalayarak gönderelim
         if len(yorumlar) > 4000:
             parcalar = [yorumlar[i:i+4000] for i in range(0, len(yorumlar), 4000)]
             for p in parcalar:
@@ -394,7 +392,7 @@ def live_match_monitor():
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
         except Exception as e:
             print(f"Canlı takip döngüsü hatası: {e}", flush=True)
-        time.sleep(120)
+        time.sleep(60) # Süre 60 saniyeye (1 dakikaya) güncellendi
 
 def background_worker():
     daily_match_fetch()
