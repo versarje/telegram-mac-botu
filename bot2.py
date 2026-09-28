@@ -4,14 +4,18 @@ import requests
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
+from google import genai
 
 app = Flask(__name__)
 
 # ================= ==========================================
-# 1. TELEGRAM VE HAFIZA AYARLARI
+# 1. AYARLAR VE GEMINI BAĞLANTISI
 # ================= ==========================================
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
+
+# Gemini İstemcisi (Ortam değişkeninden API anahtarını alır)
+gemini_client = genai.Client()
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
@@ -43,7 +47,7 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. ÇEVİRİ VE DÜZENLEME FONKSİYONLARI
+# 2. FUTBOL ÇEVİRİ VE GEMINI YAPAY ZEKA TAHMİN SİSTEMİ
 # ================= ==========================================
 LIG_CEVIRI = {
     "English Premier League": "İngiltere Premier Lig",
@@ -57,14 +61,10 @@ LIG_CEVIRI = {
 }
 
 TAKIM_CEVIRI = {
-    "Real Madrid": "Real Madrid",
-    "Barcelona": "Barcelona",
-    "Manchester City": "Manchester City",
-    "Bayern Munich": "Bayern Münih",
-    "Paris Saint-Germain": "Paris Saint-Germain",
-    "Galatasaray": "Galatasaray",
-    "Fenerbahçe": "Fenerbahçe",
-    "Beşiktaş": "Beşiktaş"
+    "Real Madrid": "Real Madrid", "Barcelona": "Barcelona",
+    "Manchester City": "Manchester City", "Bayern Munich": "Bayern Münih",
+    "Paris Saint-Germain": "Paris Saint-Germain", "Galatasaray": "Galatasaray",
+    "Fenerbahçe": "Fenerbahçe", "Beşiktaş": "Beşiktaş"
 }
 
 def cevir_isim(isim, tur="takim"):
@@ -73,45 +73,37 @@ def cevir_isim(isim, tur="takim"):
     else:
         return TAKIM_CEVIRI.get(isim, isim)
 
-def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
-    ev_lower = ev_sahibi.lower()
-    dep_lower = deplasman.lower()
-    
-    devler = ["real madrid", "barcelona", "manchester city", "bayern", "psg", "galatasaray", "fenerbahçe", "beşiktaş", "liverpool", "arsenal", "inter", "milan", "juventus"]
-    
-    ev_guclu = any(dev in ev_lower for dev in devler)
-    dep_guclu = any(dev in dep_lower for dev in dep_lower)
-    
-    mac_kodu = str(400 + index)
-    
-    if ev_guclu and dep_guclu:
-        oran_ms1, oran_ms0, oran_ms2 = "1.85", "3.40", "3.10"
-        tahmin = "Karşılıklı Gol Var (KG Var) & 2.5 Üst"
-        yorum = "İki formlu ekip de hücumda etkili. Karşılıklı goller kaçınılmaz."
-    elif ev_guclu and not dep_guclu:
-        oran_ms1, oran_ms0, oran_ms2 = "1.35", "4.50", "6.20"
-        tahmin = "Maç Sonucu 1 (MS 1) & 1.5 Üst"
-        yorum = "Ev sahibi takım saha avantajı ve kadro kalitesiyle maçı koparır."
-    elif not ev_guclu and dep_guclu:
-        oran_ms1, oran_ms0, oran_ms2 = "4.20", "3.60", "1.75"
-        tahmin = "Deplasman Kazanır (MS 2)"
-        yorum = "Deplasman ekibi oyun kalitesiyle rakibine üstünlük kuracaktır."
-    else:
-        oran_ms1, oran_ms0, oran_ms2 = "2.10", "3.10", "2.80"
-        tahmin = "2.5 Alt (Taktiksel Mücadele)"
-        yorum = "Orta saha mücadelesi şeklinde geçmesi beklenen, az gol atılacak maç."
-        
-    return mac_kodu, oran_ms1, oran_ms0, oran_ms2, tahmin, yorum
+def gemini_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
+    """Gemini yapay zekasına maç hakkında analiz ve tahmin sorar"""
+    prompt = (
+        f"Sen profesyonel bir futbol analiz uzmanı ve iddaa yorumorusun. "
+        f"Lig: {lig_adi}, Ev Sahibi: {ev_sahibi}, Deplasman: {deplasman}. "
+        f"Bu maç için kısa bir iddaa analizi yap. Şu formatta yanıt ver:\n"
+        f"Oranlar (MS1, MS0, MS2 şeklinde tahmini oranlar örn: 1.70 - 3.40 - 4.10):\n"
+        f"Tahmin (En olası bahis tercihi örn: MS 1 veya KG Var):\n"
+        f"Yorum (2 cümlelik profesyonel analiz):\n"
+        f"Lütfen aşırı uzun yazma, tam Telegram formatına uygun olsun."
+    )
+    try:
+        response = gemini_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
+        metin = response.text.strip()
+        return metin
+    except Exception as e:
+        print(f"Gemini API hata: {e}", flush=True)
+        return "Oranlar: 2.10 - 3.10 - 2.80\nTahmin: 2.5 Alt\nYorum: Gemini analizi şu an yüklenemedi, standart sistem devrede."
 
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
     if not hafiza_maclar:
-        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı.</b>")
+        send_telegram_message(chat_id, "⚠️ <b>Futbol bülteninde aktif maç bulunamadı.</b>")
         return
         
     simdi_tr = datetime.now(timezone(timedelta(hours=3)))
     tarih_str = format_turkce_tarih(simdi_tr)
-    send_telegram_message(chat_id, f"⚽ <b>İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    send_telegram_message(chat_id, f"⚽ <b>GEMİNİ DESTEKLİ FUTBOL BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     ligler = {}
     for m in hafiza_maclar:
@@ -124,41 +116,17 @@ def bulten_metnini_gonder(chat_id):
                 f"<blockquote>"
                 f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']} (TR)</b>\n"
                 f"📌 <b>{mac['ev_sahibi']} - {mac['deplasman']}</b>\n"
-                f"📊 <i>Oranlar:</i> MS 1: <code>{mac['oran_1']}</code> | MS 0: <code>{mac['oran_0']}</code> | MS 2: <code>{mac['oran_2']}</code>\n"
-                f"🎯 <b>Tahmin:</b> <i>{mac['tahmin']}</i>\n"
-                f"💡 <b>Yorum:</b> {mac['yorum']}"
+                f"🤖 <b>Gemini Analizi:</b>\n{mac['gemini_analiz']}"
                 f"</blockquote>\n"
             )
         send_telegram_message(chat_id, lig_mesaj)
-        time.sleep(0.3)
+        time.sleep(0.4)
 
 # ================= ==========================================
-# 3. MODÜL B: T2 CANLI ANALİZ SİSTEMİ (!t2)
+# 3. MODÜL B: T2 CANLI YAPAY ZEKA ANALİZİ (!t2)
 # ================= ==========================================
-def canli_mac_analiz_uret(ev_sahibi, deplasman, skor_ev, skor_dep, dakika_str):
-    toplam_gol = skor_ev + skor_dep
-    try:
-        dakika = int(''.join(filter(str.isdigit, dakika_str)))
-    except:
-        dakika = 45
-
-    if toplam_gol >= 3:
-        tahmin = "4.5 Üst & Karşılıklı Gol Var"
-        yorum = f"Dakika {dakika}: Müthiş bir gol düellosu yaşanıyor, goller devam eder."
-    elif toplam_gol == 0 and dakika > 60:
-        tahmin = "Tek Gol & Sonradan Açılır"
-        yorum = f"Dakika {dakika}: Baskı arttı, ilk golü atan maçı koparır."
-    elif skor_ev != skor_dep:
-        tahmin = "Favori Baskıda / 1.5 Üst"
-        yorum = f"Dakika {dakika}: Geride olan takım risk alıyor, açık alanlar doğuyor."
-    else:
-        tahmin = "Sıradaki Golü Atan Kazanır"
-        yorum = f"Dakika {dakika}: Skor dengede, takımlar kontrollü oynuyor."
-        
-    return tahmin, yorum
-
 def t2_canli_analiz_gonder(chat_id):
-    send_telegram_message(chat_id, "🔴 <b>T2 Bot: Canlı maçlar taranıyor ve anlık analiz yapılıyor...</b>")
+    send_telegram_message(chat_id, "🔴 <b>Gemini T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
@@ -173,48 +141,50 @@ def t2_canli_analiz_gonder(chat_id):
                     status_detail = event.get("status", {}).get("type", {}).get("shortDetail", "Devam Ediyor")
                     competitors = event.get("competitions", [{}])[0].get("competitors", [])
                     if len(competitors) >= 2:
-                        ev_ham = competitors[0].get("team", {}).get("displayName", "")
-                        dep_ham = competitors[1].get("team", {}).get("displayName", "")
-                        ev = cevir_isim(ev_ham, "takim")
-                        dep = cevir_isim(dep_ham, "takim")
-                        
+                        ev = cevir_isim(competitors[0].get("team", {}).get("displayName", ""), "takim")
+                        dep = cevir_isim(competitors[1].get("team", {}).get("displayName", ""), "takim")
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
-                        tahmin, yorum = canli_mac_analiz_uret(ev, dep, score_ev, score_dep, status_detail)
+                        # Canlı maç için Gemini yorumu
+                        prompt = f"Futbol Canlı Maç: {ev} {score_ev} - {score_dep} {dep}, Dakika: {status_detail}. Bu canlı durum için sonraki gol veya maç sonu tahmini yap (tek cümle)."
+                        try:
+                            resp = gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                            canli_yorum = resp.text.strip()
+                        except:
+                            canli_yorum = "Mücadele tempolu devam ediyor, sonraki golü atan avantajı yakalar."
                         
                         canli_maclar.append({
                             "ev_sahibi": ev, "deplasman": dep,
                             "skor_ev": score_ev, "skor_dep": score_dep,
-                            "dakika": status_detail, "tahmin": tahmin, "yorum": yorum
+                            "dakika": status_detail, "yorum": canli_yorum
                         })
         
         if not canli_maclar:
-            send_telegram_message(chat_id, "🔴 <b>T2 Canlı Analiz:</b> Şu anda oynanan canlı maç bulunmuyor.")
+            send_telegram_message(chat_id, "🔴 <b>Gemini Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
             return
             
-        mesaj = "🔴 <b>T2 CANLI MAÇLAR & ANLIK ANALİZLER</b>\n\n"
+        mesaj = "🔴 <b>GEMİNİ CANLI MAÇ YORUMLARI</b>\n\n"
         for mac in canli_maclar:
             mesaj += (
                 f"<blockquote>"
                 f"⏱ <b>Dakika:</b> <code>{mac['dakika']}</code>\n"
                 f"📌 <b>{mac['ev_sahibi']}</b> <b>{mac['skor_ev']} - {mac['skor_dep']}</b> <b>{mac['deplasman']}</b>\n"
-                f"⚡ <b>Canlı Tahmin:</b> <i>{mac['tahmin']}</i>\n"
-                f"💡 <b>Yorum:</b> {mac['yorum']}"
+                f"🤖 <b>Yapay Zeka Canlı Görüşü:</b> {mac['yorum']}"
                 f"</blockquote>\n"
             )
         send_telegram_message(chat_id, mesaj)
             
     except Exception as e:
-        print(f"T2 Canlı analiz hatası: {e}", flush=True)
-        send_telegram_message(chat_id, "⚠️ T2 Canlı maçlar taranırken bir hata oluştu.")
+        print(f"Canlı analiz hata: {e}", flush=True)
+        send_telegram_message(chat_id, "⚠️ Canlı analiz yapılırken bir hata oluştu.")
 
 # ================= ==========================================
 # 4. FLASK WEBHOOK VE YÖNLENDİRİCİ
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Bot Aktif ve Sorunsuz Çalışıyor!"
+    return "Gemini Destekli Futbol Botu Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -225,10 +195,8 @@ def webhook():
         chat_id = message_data.get("chat", {}).get("id")
         
         if text == "!b" and chat_id:
-            print(f"!b komutu algılandı (Chat ID: {chat_id})", flush=True)
             bulten_metnini_gonder(chat_id)
         elif text == "!t2" and chat_id:
-            print(f"T2 Modülü: !t2 komutu algılandı (Chat ID: {chat_id})", flush=True)
             t2_canli_analiz_gonder(chat_id)
             
     return jsonify({"status": "ok"}), 200
@@ -241,11 +209,11 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ
+# 5. ARKA PLAN DÖNGÜLERİ (Futbol Bülteni & Gol Takibi)
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Bülten maçları taranıyor...", flush=True)
+    print("Futbol bülteni ve Gemini analizleri hazırlanıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -257,11 +225,11 @@ def daily_match_fetch():
             events = data.get("events", [])
             idx = 0
             for event in events:
-                league_ham = "Diğer Ligler"
+                league_ham = "Futbol Ligi"
                 try:
                     league_ham = event.get("competitions", [{}])[0].get("tournament", {}).get("name") or \
                                  data.get("leagues", [{}])[0].get("name") or \
-                                 event.get("season", {}).get("slug", "Genel Lig")
+                                 event.get("season", {}).get("slug", "Futbol Maçı")
                 except:
                     pass
                 
@@ -269,11 +237,8 @@ def daily_match_fetch():
 
                 competitors = event.get("competitions", [{}])[0].get("competitors", [])
                 if len(competitors) >= 2:
-                    ev_ham = competitors[0].get("team", {}).get("displayName", "")
-                    dep_ham = competitors[1].get("team", {}).get("displayName", "")
-                    
-                    ev = cevir_isim(ev_ham, "takim")
-                    dep = cevir_isim(dep_ham, "takim")
+                    ev = cevir_isim(competitors[0].get("team", {}).get("displayName", ""), "takim")
+                    dep = cevir_isim(competitors[1].get("team", {}).get("displayName", ""), "takim")
                     
                     date_str = event.get("date", "")
                     saat_formatli = "21:45"
@@ -286,21 +251,26 @@ def daily_match_fetch():
                             pass
                     
                     idx += 1
-                    mac_kodu, o1, o0, o2, tahmin, yorum = iddaa_analiz_ve_oran_uret(ev, dep, idx)
+                    mac_kodu = str(500 + idx)
+                    
+                    # Her maç için Gemini yapay zeka analizini çağırıyoruz
+                    gemini_analiz = gemini_mac_tahmini_uret(ev, dep, league_name)
+                    
                     yeni_hafiza.append({
                         "lig": league_name, "kod": mac_kodu, "ev_sahibi": ev, "deplasman": dep,
-                        "saat": saat_formatli, "oran_1": o1, "oran_0": o0, "oran_2": o2,
-                        "tahmin": tahmin, "yorum": yorum
+                        "saat": saat_formatli, "gemini_analiz": gemini_analiz
                     })
+                    # API limitlerine takılmamak için minik bekleme
+                    time.sleep(0.5)
     except Exception as e:
-        print(f"Veri çekme hatası: {e}", flush=True)
+        print(f"Futbol veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı Gemini analizleriyle hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
-    print("Canlı maç takip ve gol bildirim servisi çalışıyor.", flush=True)
+    print("Futbol canlı skor ve gol takip servisi aktif.", flush=True)
     while True:
         try:
             today_str = time.strftime("%Y%m%d")
@@ -315,11 +285,8 @@ def live_match_monitor():
                     status_detail = event.get("status", {}).get("type", {}).get("shortDetail", "")
                     competitors = event.get("competitions", [{}])[0].get("competitors", [])
                     if len(competitors) >= 2:
-                        ev_ham = competitors[0].get("team", {}).get("displayName", "")
-                        dep_ham = competitors[1].get("team", {}).get("displayName", "")
-                        ev = cevir_isim(ev_ham, "takim")
-                        dep = cevir_isim(dep_ham, "takim")
-                        
+                        ev = cevir_isim(competitors[0].get("team", {}).get("displayName", ""), "takim")
+                        dep = cevir_isim(competitors[1].get("team", {}).get("displayName", ""), "takim")
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
@@ -332,9 +299,9 @@ def live_match_monitor():
                             if (score_ev != eski["score_ev"] or score_dep != eski["score_dep"]) and status_type == "STATUS_IN_PROGRESS":
                                 atan_takim = ev if score_ev > eski["score_ev"] else dep
                                 gol_mesaj = (
-                                    f"⚽ <b>GOL!</b> ⚽\n"
-                                    f"🎯 <b>Atan Takım:</b> {atan_takim}\n"
-                                    f"📊 <b>Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
+                                    f"⚽ <b>FUTBOL - GOL SESİ!</b> ⚽\n"
+                                    f"🎯 <b>Golü Atan:</b> {atan_takim}\n"
+                                    f"📊 <b>Anlık Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
                                     f"⏱ <b>Dakika:</b> <code>{status_detail}</code>"
                                 )
                                 send_telegram_message(TELEGRAM_CHAT_ID, gol_mesaj)
@@ -344,8 +311,7 @@ def live_match_monitor():
                             if status_type == "STATUS_FINAL" and eski["status"] != "STATUS_FINAL":
                                 bitis_mesaj = (
                                     f"🏁 <b>MAÇ SONUCU</b> 🏁\n"
-                                    f"📊 <b>Final Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
-                                    f"🏆 <i>Karşılaşma sona erdi.</i>"
+                                    f"📊 <b>Final Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}"
                                 )
                                 send_telegram_message(TELEGRAM_CHAT_ID, bitis_mesaj)
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
@@ -360,11 +326,11 @@ def background_worker():
     tarih_str = format_turkce_tarih(simdi_tr)
     
     status_msg = (
-        f"🤖 <b>Bot Aktif!</b>\n\n"
+        f"🤖 <b>Gemini Destekli Futbol Botu Aktif!</b>\n\n"
         f"📅 <b>Bugün:</b> {tarih_str}\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Tüm ligler bülteni\n"
-        f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler"
+        f"👉 <code>!b</code> -> Gemini Tahminli Futbol Bülteni\n"
+        f"👉 <code>!t2</code> -> Yapay Zeka Canlı Maç Yorumları"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
