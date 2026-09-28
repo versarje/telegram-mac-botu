@@ -16,6 +16,12 @@ TELEGRAM_CHAT_ID = "-1003991937105"
 
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+# ESPN API'nin "Access Denied" hatası vermemesi için tarayıcı taklidi yapan başlıklar
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*"
+}
+
 hafiza_maclar = []
 canli_takip_hafizasi = {}
 aktif_tahminler = {}
@@ -187,7 +193,9 @@ def t2_canli_analiz_gonder(chat_id):
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
         print(f"[DEBUG] ESPN Canlı Maçlar API İsteği: {api_url}", flush=True)
-        res = requests.get(api_url, timeout=12)
+        
+        # HEADERS eklendi
+        res = requests.get(api_url, headers=HEADERS, timeout=12)
         print(f"[DEBUG] ESPN Canlı Yanıt Kodu: {res.status_code}", flush=True)
         
         canli_maclar = []
@@ -285,7 +293,9 @@ def daily_match_fetch():
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
-        res = requests.get(api_url, timeout=12)
+        
+        # HEADERS eklendi
+        res = requests.get(api_url, headers=HEADERS, timeout=12)
         print(f"[DEBUG] Günlük Bülten API Durum Kodu: {res.status_code}", flush=True)
         
         if res.status_code == 200:
@@ -337,7 +347,9 @@ def live_match_monitor():
         try:
             today_str = time.strftime("%Y%m%d")
             api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
-            res = requests.get(api_url, timeout=10)
+            
+            # HEADERS eklendi
+            res = requests.get(api_url, headers=HEADERS, timeout=10)
             
             if res.status_code == 200:
                 events = res.json().get("events", [])
