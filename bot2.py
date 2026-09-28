@@ -16,28 +16,29 @@ def home():
     return "Telegram Futbol Analiz Botu Aktif ve Calisiyor!"
 
 def run_flask():
-    # Render'ın dinamik portunu alır, yoksa 10000 kullanır
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, threaded=True)
 
 # Web sunucusunu arka planda başlat
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
-time.sleep(2)  # Portun dinlemeye geçmesi için kısa bir bekleme
+time.sleep(2)
 
 # ================= ==========================================
-# 2. TELEGRAM VE API AYARLARI
+# 2. TELEGRAM VE BELLEK (HAFIZA) AYARLARI
 # ================= ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
-gonderilen_maclar = set()  # Bildirimi atılan maçları tekrar atmamak için liste
+# Maçların ve tahminlerin tutulacağı küresel bellek (hafıza)
+hafiza_maclar = []
+last_update_id = 0  # Telegram mesajlarını okurken son okunan mesaj ID'si
 
-def send_telegram_message(message):
-    """Telegram kanalına/sohbetine mesaj gönderir."""
+def send_telegram_message(chat_id, message):
+    """Belirtilen chat_id'ye Telegram mesajı gönderir."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "HTML"
     }
@@ -45,99 +46,129 @@ def send_telegram_message(message):
         response = requests.post(url, json=payload, timeout=10)
         return response.json()
     except Exception as e:
-        print(f"Telegram mesaj gönderme hatası: {e}")
+        print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
 # ================= ==========================================
-# 3. VERİ ÇEKME VE ANALİZ FONKSİYONLARI
+# 3. VERİ ÇEKME VE TAHMİN / HAFIZAYA ALMA
 # ================= ==========================================
-def fetch_live_matches():
-    """Playwright kullanarak canlı maç verilerini ve istatistiklerini çeker."""
-    matches_data = []
+def daily_match_fetch():
+    """Günün maçlarını çeker, tahminleri yapar ve hafızaya kaydeder."""
+    global hafiza_maclar
+    print("Günün maçları çekiliyor ve hafızaya alınıyor...", flush=True)
+    
+    yeni_hafiza = []
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         
         try:
-            # Örnek hedef analiz platformu veya Flashscore/Sofascore yönlendirmesi
+            # Hedef maç/istatistik web sitesi
             page.goto("https://www.flashscore.com", timeout=60000)
             page.wait_for_timeout(3000)
             
-            # HTML içeriğini alma ve BeautifulSoup ile işleme
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Maç tarama ve veri ayıklama mantığınız
-            # (Web sitesinin selector yapısına göre veriler toplanır)
+            # TODO: Siteden bugünün maçlarını çekme mantığınız.
+            # Örnek simüle edilmiş veri yapısı:
+            ornek_maclar = [
+                {
+                    "ev_sahibi": "Galatasaray",
+                    "deplasman": "Fenerbahçe",
+                    "saat": "20:00",
+                    "tahmin": "2.5 Üst / Karşılıklı Gol Var",
+                    "guven": "%85"
+                },
+                {
+                    "ev_sahibi": "Real Madrid",
+                    "deplasman": "Barcelona",
+                    "saat": "22:00",
+                    "tahmin": "Ev Sahibi Kazanır (MS 1)",
+                    "guven": "%78"
+                }
+            ]
+            
+            yeni_hafiza = ornek_maclar
+            print(f"Hafızaya toplam {len(yeni_hafiza)} maç kaydedildi.", flush=True)
             
         except Exception as e:
-            print(f"Veri çekme sırasında hata oluştu: {e}")
+            print(f"Günlük veri çekme hatası: {e}", flush=True)
         finally:
             browser.close()
             
-    return matches_data
+    hafiza_maclar = yeni_hafiza
 
-def calculate_xg_and_stats(match):
-    """
-    Maç içi istatistikleri ve xG değerlerini değerlendirir.
-    Kriterlere uyuyorsa True ve mesaj içeriği döndürür.
-    """
-    # Örnek Analiz Kriterleri:
-    # Dakika 15-75 arası, Toplam xG > 1.2, İki takımın toplam şutu > 8
+def format_hafiza_mesaji():
+    """Hafızadaki maçları Telegram için rapor formatına getirir."""
+    if not hafiza_maclar:
+        return "⚠️ <b>Hafızada henüz kayıtlı bir maç tahmini bulunmuyor.</b>"
     
-    match_id = match.get("id")
-    home_team = match.get("home_team", "Ev Sahibi")
-    away_team = match.get("away_team", "Deplasman")
-    minute = match.get("minute", 0)
-    score = match.get("score", "0-0")
-    
-    home_xg = match.get("home_xg", 0.0)
-    away_xg = match.get("away_xg", 0.0)
-    total_xg = home_xg + away_xg
-    
-    total_shots = match.get("total_shots", 0)
-
-    # Bildirim Kriteri Kontrolü
-    if match_id not in gonderilen_maclar:
-        if 15 <= minute <= 75 and total_xg >= 1.2 and total_shots >= 8:
-            
-            msg = (
-                f"🚨 <b>CANLI MAÇ ALARMI</b> 🚨\n\n"
-                f"⚽ <b>{home_team} vs {away_team}</b>\n"
-                f"⏱ <b>Dakika:</b> {minute}' | <b>Skor:</b> {score}\n\n"
-                f"📊 <b>xG Değerleri:</b> {home_xg:.2f} - {away_xg:.2f} (Toplam: {total_xg:.2f})\n"
-                f"🎯 <b>Toplam Şut:</b> {total_shots}\n\n"
-                f"💡 <i>Yüksek gol beklentisi ve şut baskısı tespit edildi!</i>"
-            )
-            gonderilen_maclar.add(match_id)
-            return True, msg
-
-    return False, ""
+    mesaj = "📋 <b>GÜNÜN MAÇ TAHMİNLERİ VE BÜLTENİ</b> 📋\n\n"
+    for i, mac in enumerate(hafiza_maclar, 1):
+        mesaj += (
+            f"{i}. ⚽ <b>{mac['ev_sahibi']} vs {mac['deplasman']}</b>\n"
+            f"⏱ <b>Saat:</b> {mac['saat']}\n"
+            f"🎯 <b>Tahmin:</b> {mac['tahmin']}\n"
+            f"🔥 <b>Güven Oranı:</b> {mac['guven']}\n"
+            f"-----------------------------------\n"
+        )
+    return mesaj
 
 # ================= ==========================================
-# 4. BOTUN ANA DÖNGÜSÜ
+# 4. TELEGRAM DINLEYICI (!b KOMUTU)
+# ================= ==========================================
+def check_telegram_updates():
+    """Telegram'a gelen yeni mesajları kontrol eder ve !b komutunu yanıtlar."""
+    global last_update_id
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=5"
+    
+    try:
+        res = requests.get(url, timeout=10).json()
+        if res.get("ok") and res.get("result"):
+            for update in res["result"]:
+                last_update_id = update["update_id"]
+                
+                message_data = update.get("message", {})
+                text = message_data.get("text", "").strip()
+                chat_id = message_data.get("chat", {}).get("id")
+                
+                # Kullanıcı !b komutunu attığında
+                if text.lower() == "!b" and chat_id:
+                    print(f"!b komutu algılandı (Chat ID: {chat_id})", flush=True)
+                    rapor = format_hafiza_mesaji()
+                    send_telegram_message(chat_id, rapor)
+                    
+    except Exception as e:
+        print(f"Telegram güncelleme kontrol hatası: {e}", flush=True)
+
+# ================= ==========================================
+# 5. ZAMANLAYICI VE DÖNGÜ (MAIN LOOP)
 # ================= ==========================================
 def main_loop():
-    """Canlı maçları sürekli kontrol eden ana döngü."""
-    print("Bot döngüsü başlatıldı. Canlı maçlar izleniyor...")
+    print("Bot başlatıldı. Günlük bülten ve !b komut dinleyici aktif.", flush=True)
+    
+    # Bot ilk açıldığında 1 kere maçları çekip hafızaya alsın
+    daily_match_fetch()
+    
+    son_gunluk_cekme = time.time()
+    GUNLUK_SURE = 86400  # 24 Saat (saniye cinsinden)
     
     while True:
         try:
-            print("Canlı maçlar taranıyor...")
-            matches = fetch_live_matches()
+            # 1. Telegram'a !b yazıldı mı kontrol et (Her saniye)
+            check_telegram_updates()
             
-            for match in matches:
-                should_send, message = calculate_xg_and_stats(match)
-                if should_send:
-                    send_telegram_message(message)
-                    print(f"Bildirim gönderildi: {match.get('home_team')} vs {match.get('away_team')}")
-                    
+            # 2. 24 Saat dolduysa maçları tekrar çekip hafızayı güncelle
+            if time.time() - son_gunluk_cekme >= GUNLUK_SURE:
+                daily_match_fetch()
+                son_gunluk_cekme = time.time()
+                
         except Exception as e:
-            print(f"Ana döngüde hata: {e}")
+            print(f"Ana döngü hatası: {e}", flush=True)
             
-        # 60 saniyede bir tekrar tara
-        time.sleep(60)
+        time.sleep(2)  # Sunucuyu yormamak için 2 saniyede bir kontrol et
 
 if __name__ == "__main__":
     main_loop()
