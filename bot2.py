@@ -4,21 +4,18 @@ import requests
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
-from openai import OpenAI
+from groq import Groq
 
 app = Flask(__name__)
 
 # ================= ==========================================
-# 1. AYARLAR VE XAI (GROK) BAĞLANTISI
+# 1. AYARLAR VE GROQ BAĞLANTISI
 # ================= ==========================================
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
-# xAI Grok İstemcisi (OpenAI uyumlu altyapı kullanır)
-grok_client = OpenAI(
-    api_key=os.environ.get("XAI_API_KEY"),
-    base_url="https://api.x.ai/v1"
-)
+# Groq İstemcisi (Render'da GROQ_API_KEY olmalı)
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
@@ -50,7 +47,7 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. FUTBOL ÇEVİRİ VE GROK YAPAY ZEKA TAHMİN SİSTEMİ
+# 2. LİG VE TAKIM ÇEVİRİLERİ
 # ================= ==========================================
 LIG_CEVIRI = {
     "English Premier League": "İngiltere Premier Lig",
@@ -76,31 +73,30 @@ def cevir_isim(isim, tur="takim"):
     else:
         return TAKIM_CEVIRI.get(isim, isim)
 
-def grok_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
-    """xAI Grok modeli ile maç analizi ve tahmini üretir"""
+def toplu_grok_analiz_uret(mac_listesi_text):
+    """Tüm maç listesini tek seferde Groq'a gönderip toplu tahmin alır"""
     prompt = (
         f"Sen profesyonel bir futbol analiz uzmanı ve iddaa yorumorusun. "
-        f"Lig: {lig_adi}, Ev Sahibi: {ev_sahibi}, Deplasman: {deplasman}. "
-        f"Bu maç için kısa bir iddaa analizi yap. Şu formatta yanıt ver:\n"
-        f"Oranlar (MS1, MS0, MS2 şeklinde tahmini oranlar örn: 1.70 - 3.40 - 4.10):\n"
-        f"Tahmin (En olası bahis tercihi örn: MS 1 veya KG Var):\n"
-        f"Yorum (2 cümlelik profesyonel analiz):\n"
-        f"Lütfen aşırı uzun yazma, tam Telegram formatına uygun olsun."
+        f"Aşağıda bugün oynanacak olan maçların bir listesi var. Her biri için kısa birer iddaa tahmini ve oranı üret.\n\n"
+        f"Maç Listesi:\n{mac_listesi_text}\n\n"
+        f"Lütfen her maç için şu formatı bozmadan yanıt ver:\n"
+        f"Kod: [Maç Kodu] | Oranlar: [MS1 - MS0 - MS2] | Tahmin: [...] | Yorum: [...]\n"
+        f"Aşırı uzun yazma, tam Telegram formatına uygun olsun."
     )
     try:
-        completion = grok_client.chat.completions.create(
-            model="grok-beta",  # xAI model adı
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "Sen uzman bir futbol analistisin."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=300
+            max_tokens=2500
         )
         return completion.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Grok API hata: {e}", flush=True)
-        return "Oranlar: 2.10 - 3.10 - 2.80\nTahmin: 2.5 Alt\nYorum: Grok analizi geçici olarak yüklenemedi."
+        print(f"Groq Toplu API hata: {e}", flush=True)
+        return "Toplu analiz şu an yüklenemedi."
 
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
@@ -110,30 +106,30 @@ def bulten_metnini_gonder(chat_id):
         
     simdi_tr = datetime.now(timezone(timedelta(hours=3)))
     tarih_str = format_turkce_tarih(simdi_tr)
-    send_telegram_message(chat_id, f"⚽ <b>GROK (xAI) DESTEKLİ FUTBOL BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    send_telegram_message(chat_id, f"⚽ <b>GROQ TOPLU ANALİZLİ BÜLTEN</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
-    ligler = {}
+    # Tüm bülteni tek seferde yapay zekaya yollamak için metin formatına döküyoruz
+    mac_metinleri = ""
     for m in hafiza_maclar:
-        ligler.setdefault(m['lig'], []).append(m)
-        
-    for lig, mac_listesi in sorted(ligler.items()):
-        lig_mesaj = f"🏆 <b>{lig.upper()}</b>\n"
-        for mac in sorted(mac_listesi, key=lambda x: x['saat']):
-            lig_mesaj += (
-                f"<blockquote>"
-                f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']} (TR)</b>\n"
-                f"📌 <b>{mac['ev_sahibi']} - {mac['deplasman']}</b>\n"
-                f"🤖 <b>Grok Analizi:</b>\n{mac['grok_analiz']}"
-                f"</blockquote>\n"
-            )
-        send_telegram_message(chat_id, lig_mesaj)
-        time.sleep(0.5)
+        mac_metinleri += f"Kod: {m['kod']} | Lig: {m['lig']} | Saat: {m['saat']} | Maç: {m['ev_sahibi']} vs {m['deplasman']}\n"
+    
+    # Tek istek atılıyor (Dakikalık 30 istek sınırına asla takılmaz)
+    toplu_sonuc = toplu_grok_analiz_uret(mac_metinleri)
+    
+    # Sonucu Telegram mesaj sınırına (4000 karakter) dikkat ederek parça parça veya doğrudan gönderelim
+    if len(toplu_sonuc) > 4000:
+        parcalar = [toplu_sonuc[i:i+4000] for i in range(0, len(toplu_sonuc), 4000)]
+        for p in parcalar:
+            send_telegram_message(chat_id, f"<blockquote>{p}</blockquote>")
+            time.sleep(0.5)
+    else:
+        send_telegram_message(chat_id, f"<blockquote>{toplu_sonuc}</blockquote>")
 
 # ================= ==========================================
 # 3. MODÜL B: T2 CANLI YAPAY ZEKA ANALİZİ (!t2)
 # ================= ==========================================
 def t2_canli_analiz_gonder(chat_id):
-    send_telegram_message(chat_id, "🔴 <b>Grok T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
+    send_telegram_message(chat_id, "🔴 <b>Groq T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
@@ -153,37 +149,26 @@ def t2_canli_analiz_gonder(chat_id):
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
-                        prompt = f"Futbol Canlı Maç: {ev} {score_ev} - {score_dep} {dep}, Dakika: {status_detail}. Bu canlı durum için sonraki gol veya maç sonu tahmini yap (tek cümle)."
-                        try:
-                            completion = grok_client.chat.completions.create(
-                                model="grok-beta",
-                                messages=[{"role": "user", "content": prompt}],
-                                max_tokens=150
-                            )
-                            canli_yorum = completion.choices[0].message.content.strip()
-                        except:
-                            canli_yorum = "Mücadele tempolu devam ediyor."
-                        
-                        canli_maclar.append({
-                            "ev_sahibi": ev, "deplasman": dep,
-                            "skor_ev": score_ev, "skor_dep": score_dep,
-                            "dakika": status_detail, "yorum": canli_yorum
-                        })
+                        canli_maclar.append(f"{ev} {score_ev} - {score_dep} {dep} (Dakika: {status_detail})")
         
         if not canli_maclar:
-            send_telegram_message(chat_id, "🔴 <b>Grok Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
+            send_telegram_message(chat_id, "🔴 <b>Groq Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
             return
             
-        mesaj = "🔴 <b>GROK CANLI MAÇ YORUMLARI</b>\n\n"
-        for mac in canli_maclar:
-            mesaj += (
-                f"<blockquote>"
-                f"⏱ <b>Dakika:</b> <code>{mac['dakika']}</code>\n"
-                f"📌 <b>{mac['ev_sahibi']}</b> <b>{mac['skor_ev']} - {mac['skor_dep']}</b> <b>{mac['deplasman']}</b>\n"
-                f"🤖 <b>Canlı Görüş:</b> {mac['yorum']}"
-                f"</blockquote>\n"
+        canli_text = "\n".join(canli_maclar)
+        prompt = f"Şu an oynanan canlı futbol maçları:\n{canli_text}\nBu maçların gidişatına göre kısa birer canlı iddaa yorumu yap."
+        
+        try:
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1000
             )
-        send_telegram_message(chat_id, mesaj)
+            yorumlar = completion.choices[0].message.content.strip()
+        except:
+            yorumlar = "Canlı analiz şu an üretilemedi."
+
+        send_telegram_message(chat_id, f"🔴 <b>GROK CANLI MAÇ YORUMLARI</b>\n\n<blockquote>{yorumlar}</blockquote>")
             
     except Exception as e:
         print(f"Canlı analiz hata: {e}", flush=True)
@@ -194,7 +179,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Grok (xAI) Destekli Futbol Botu Aktif!"
+    return "Groq Toplu Analiz Futbol Botu Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -223,7 +208,7 @@ flask_thread.start()
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Futbol bülteni ve Grok analizleri hazırlanıyor...", flush=True)
+    print("Futbol bülteni taranıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -263,18 +248,14 @@ def daily_match_fetch():
                     idx += 1
                     mac_kodu = str(500 + idx)
                     
-                    grok_analiz = grok_mac_tahmini_uret(ev, dep, league_name)
-                    
                     yeni_hafiza.append({
-                        "lig": league_name, "kod": mac_kodu, "ev_sahibi": ev, "deplasman": dep,
-                        "saat": saat_formatli, "grok_analiz": grok_analiz
+                        "lig": league_name, "kod": mac_kodu, "ev_sahibi": ev, "deplasman": dep, "saat": saat_formatli
                     })
-                    time.sleep(0.4)
     except Exception as e:
         print(f"Futbol veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı Grok analizleriyle hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -334,11 +315,11 @@ def background_worker():
     tarih_str = format_turkce_tarih(simdi_tr)
     
     status_msg = (
-        f"🤖 <b>Grok (xAI) Destekli Futbol Botu Aktif!</b>\n\n"
+        f"🤖 <b>Groq Toplu Analiz Futbol Botu Aktif!</b>\n\n"
         f"📅 <b>Bugün:</b> {tarih_str}\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Grok Tahminli Futbol Bülteni\n"
-        f"👉 <code>!t2</code> -> Yapay Zeka Canlı Maç Yorumları"
+        f"👉 <code>!b</code> -> Toplu Groq Tahminli Bülten\n"
+        f"👉 <code>!t2</code> -> Canlı Toplu Maç Yorumları"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
