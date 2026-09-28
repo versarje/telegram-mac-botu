@@ -3,7 +3,7 @@ import time
 import requests
 import threading
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
@@ -15,6 +15,8 @@ TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
 hafiza_maclar = []
+canli_takip_hafizasi = {}  # Maçların anlık skor ve durumlarını takip etmek için
+DOSYA_ADI = "gunluk_futbol_analiz_bulteni.txt"
 
 def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -31,87 +33,97 @@ def send_telegram_message(chat_id, message):
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
+def send_telegram_document(chat_id, file_path, caption=""):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'document': f}
+            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
+            response = requests.post(url, data=data, files=files, timeout=20)
+            return response.json()
+    except Exception as e:
+        print(f"Dosya gönderme hatası: {e}", flush=True)
+        return None
+
 def gelismis_ai_analiz_uret(ev_sahibi, deplasman):
-    # Takım isimlerini küçük harfe çevirerek analiz motoruna sokuyoruz
     ev_lower = ev_sahibi.lower()
     dep_lower = deplasman.lower()
     
-    # Büyük/güçlü takım anahtar kelimeleri
     devler = ["real madrid", "barcelona", "manchester city", "bayern", "psg", "galatasaray", "fenerbahçe", "beşiktaş", "liverpool", "arsenal", "inter", "milan", "juventus"]
     
     ev_guclu = any(dev in ev_lower for dev in devler)
     dep_guclu = any(dev in dep_lower for dev in devler)
     
     if ev_guclu and dep_guclu:
-        tahmin = "🔥 Karşılıklı Gol Var & 2.5 Üst (Zirve Mücadelesi)"
+        tahmin = "Karşılıklı Gol Var & 2.5 Üst (Zirve Mücadelesi)"
         skor = "2-1 / 2-2"
         guven = "%84 (Yüksek)"
         analiz = "İki formlu dev ekip de sahaya galibiyet için çıkacaktır. Tempomuz yüksek ve gol beklentisi (xG) üst düzeyde."
     elif ev_guclu and not dep_guclu:
-        tahmin = "⭐ Ev Sahibi Net Favori (MS 1 & 1.5 Üst)"
+        tahmin = "Ev Sahibi Net Favori (MS 1 & 1.5 Üst)"
         skor = "2-0 / 3-0"
         guven = "%89 (Çok Güçlü)"
         analiz = "Ev sahibinin iç saha baskısı ve kadro kalitesi maçın kontrolünü ilk dakikadan itibaren eline alacağını gösteriyor."
     elif not ev_guclu and dep_guclu:
-        tahmin = "⚡ Deplasman Baskın Çıkar (MS 2 veya KG Var)"
+        tahmin = "Deplasman Baskın Çıkar (MS 2 veya KG Var)"
         skor = "1-2 / 0-2"
         guven = "%81 (Güçlü)"
         analiz = "Deplasman ekibi kadro üstünlüğüyle oyunu domine etmeye çalışacaktır. Gollü geçmeye aday bir müsabaka."
     else:
-        # Dengeli veya alt lig takımları için olasılıksal analiz
         secenekler = [
-            {"tahmin": "🛡️ 2.5 Alt (Taktiksel Kilitlenme)", "skor": "1-0 / 0-1", "guven": "%74", "analiz": "Orta saha mücadelesi şeklinde geçmesi beklenen, az pozisyonlu maç senaryosu."},
-            {"tahmin": "⚡ Karşılıklı Gol (KG) Var", "skor": "1-1 / 2-1", "guven": "%77", "analiz": "Savunma zaafları bulunan iki ekibin de skor üretme ihtimali oldukça yüksek."},
-            {"tahmin": "🎯 İlk Yarı 0.5 Üst", "skor": "1-0 (İY)", "guven": "%79", "analiz": "Maçın erken dakikalarında buluncak bir gol oyunun kilidini açacaktır."}
+            {"tahmin": "2.5 Alt (Taktiksel Kilitlenme)", "skor": "1-0 / 0-1", "guven": "%74", "analiz": "Orta saha mücadelesi şeklinde geçmesi beklenen, az pozisyonlu maç senaryosu."},
+            {"tahmin": "Karşılıklı Gol (KG) Var", "skor": "1-1 / 2-1", "guven": "%77", "analiz": "Savunma zaafları bulunan iki ekibin de skor üretme ihtimali oldukça yüksek."},
+            {"tahmin": "İlk Yarı 0.5 Üst", "skor": "1-0 (İY)", "guven": "%79", "analiz": "Maçın erken dakikalarında buluncak bir gol oyunun kilidini açacaktır."}
         ]
-        # Karakter uzunluklarına göre dinamik seçim
         secim = secenekler[(len(ev_sahibi) + len(deplasman)) % len(secenekler)]
         return secim['tahmin'], secim['skor'], secim['guven'], secim['analiz']
         
     return tahmin, skor, guven, analiz
 
-def send_afilli_bulten(chat_id):
-    if not hafiza_maclar:
-        send_telegram_message(chat_id, "⚠️ <b>Hafızada işlenecek aktif maç bulunamadı...</b>")
-        return
-
-    chunk_size = 6  # Detaylı analiz kartları sığması için 6'şarlı paketler
-    total = len(hafiza_maclar)
+def bulteni_not_defterine_kaydet():
+    global hafiza_maclar
+    tarih_str = datetime.now().strftime("%d.%m.%Y %H:%M")
     
-    for i in range(0, total, chunk_size):
-        chunk = hafiza_maclar[i:i + chunk_size]
+    with open(DOSYA_ADI, "w", encoding="utf-8") as f:
+        f.write("=" * 60 + "\n")
+        f.write(f"  YAPAY ZEKA FUTBOL MAÇ & ANALİZ BÜLTENİ\n")
+        f.write(f"  Oluşturulma Tarihi: {tarih_str}\n")
+        f.write(f"  Toplam Maç Sayısı: {len(hafiza_maclar)}\n")
+        f.write("=" * 60 + "\n\n")
         
-        mesaj = f"🧠 <b>YAPAY ZEKA CANLI MAÇ ANALİZ RAPORU</b> 🤖\n"
-        mesaj += f"📊 <i>Bülten Aralığı: [{i+1} - {min(i+chunk_size, total)} / Toplam: {total}]</i>\n"
-        mesaj += "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        for idx, mac in enumerate(chunk, i + 1):
-            ev = str(mac['ev_sahibi']).replace('<', '&lt;').replace('>', '&gt;')
-            dep = str(mac['deplasman']).replace('<', '&lt;').replace('>', '&gt;')
-            saat = str(mac['saat']).replace('<', '&lt;').replace('>', '&gt;')
-            tahmin = mac['tahmin']
-            skor = mac['skor']
-            guven = mac['guven']
-            analiz = mac['analiz']
-            
-            mesaj += (
-                f"⚽ <b>{idx}. {ev} vs {dep}</b>\n"
-                f"⏰ <b>Başlangıç:</b> <code>{saat}</code> | 🎯 <b>Güven:</b> <b>{guven}</b>\n"
-                f"💡 <b>AI Tahmin:</b> <b>{tahmin}</b>\n"
-                f"🔢 <b>Beklenen Skor:</b> <code>{skor}</code>\n"
-                f"📝 <i>Analiz: {analiz}</i>\n"
-                f"───────────────────────────\n"
-            )
-        
-        send_telegram_message(chat_id, mesaj)
-        time.sleep(0.7)
+        if not hafiza_maclar:
+            f.write("Şu anda sistemde aktif maç bulunmuyor.\n")
+        else:
+            for idx, mac in enumerate(hafiza_maclar, 1):
+                f.write(f"[{idx}] {mac['ev_sahibi']} vs {mac['deplasman']}\n")
+                f.write(f"    - Başlangıç Saati : {mac['saat']}\n")
+                f.write(f"    - Yapay Zeka Tahmini : {mac['tahmin']}\n")
+                f.write(f"    - Beklenen Skor      : {mac['skor']}\n")
+                f.write(f"    - Güven Oranı        : {mac['guven']}\n")
+                f.write(f"    - Detaylı Analiz     : {mac['analiz']}\n")
+                f.write("-" * 60 + "\n")
+
+def bulten_dosyasini_gonder(chat_id):
+    if not hafiza_maclar:
+        send_telegram_message(chat_id, "⚠️ <b>Not defterine yazılacak aktif maç bulunamadı...</b>")
+        return
+    
+    bulteni_not_defterine_kaydet()
+    caption = f"📄 <b>Günlük Yapay Zeka Futbol Analiz Bülteni</b>\n📅 Tarih: {datetime.now().strftime('%d.%m.%Y')}\n🤖 Tüm maçlar ve detaylı analizler not defteri formatında hazırdır."
+    send_telegram_document(chat_id, DOSYA_ADI, caption)
 
 # ================= ==========================================
 # 2. FLASK SERVER VE TELEGRAM WEBHOOK
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google & AI Canlı Maç Analiz Botu Aktif!"
+    return "Not Defteri & Gelişmiş Canlı Takip Botu Aktif!"
+
+@app.route('/download', methods=['GET'])
+def download_file():
+    if os.path.exists(DOSYA_ADI):
+        return send_file(DOSYA_ADI, as_attachment=True)
+    return "Henüz oluşturulmuş bir bülten dosyası yok.", 404
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -123,7 +135,7 @@ def webhook():
         
         if text.lower() == "!b" and chat_id:
             print(f"!b komutu algılandı (Chat ID: {chat_id})", flush=True)
-            send_afilli_bulten(chat_id)
+            bulten_dosyasini_gonder(chat_id)
             
     return jsonify({"status": "ok"}), 200
 
@@ -135,14 +147,13 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 3. GERÇEK ZAMANLI VERİ VE ANALİZ MOTORU
+# 3. VERİ ÇEKME VE CANLI MAÇ TAKİP MOTORU
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Gerçek zamanlı güncel bülten ve saatler taranıyor...", flush=True)
+    print("Güncel bülten taranıyor...", flush=True)
     
     yeni_hafiza = []
-    
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
@@ -156,7 +167,6 @@ def daily_match_fetch():
                     ev = competitors[0].get("team", {}).get("displayName", "")
                     dep = competitors[1].get("team", {}).get("displayName", "")
                     
-                    # Saat çevrimi (UTC+3 Türkiye Saati)
                     date_str = event.get("date", "")
                     saat_formatli = "Canlı / Oynanıyor"
                     if date_str:
@@ -167,7 +177,6 @@ def daily_match_fetch():
                         except:
                             pass
                     
-                    # Gelişmiş Yapay Zeka Analiz Motorunu Çağır
                     tahmin, skor, guven, analiz = gelismis_ai_analiz_uret(ev, dep)
                     
                     yeni_hafiza.append({
@@ -180,46 +189,84 @@ def daily_match_fetch():
                         "analiz": analiz
                     })
     except Exception as e:
-        print(f"Canlı veri çekme hatası: {e}", flush=True)
-
-    # Yedek Google Tarama Katmanı
-    if not yeni_hafiza:
-        print("Google yedek katmanına bağlanılıyor...", flush=True)
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        try:
-            google_url = "https://www.google.com/search?q=bug%C3%BCn+oynanacak+futbol+ma%C3%A7lar%C4%B1&hl=tr&gl=tr"
-            response = requests.get(google_url, headers=headers, timeout=15)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
-                away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
-                
-                min_len = min(len(home_teams), len(away_teams))
-                for i in range(min_len):
-                    tahmin, skor, guven, analiz = gelismis_ai_analiz_uret(home_teams[i], away_teams[i])
-                    yeni_hafiza.append({
-                        "ev_sahibi": home_teams[i],
-                        "deplasman": away_teams[i],
-                        "saat": "Bugün",
-                        "tahmin": tahmin,
-                        "skor": skor,
-                        "guven": guven,
-                        "analiz": analiz
-                    })
-        except Exception as e:
-            print(f"Google yedek arama hatası: {e}", flush=True)
+        print(f"Veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"İşlem tamamlandı. Yapay zeka motoru {len(hafiza_maclar)} maça analiz üretti.", flush=True)
+    bulteni_not_defterine_kaydet()
+    print(f"Bülten güncellendi. {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
+
+def live_match_monitor():
+    global canli_takip_hafizasi
+    print("Canlı maç takip ve detaylı gol bildirim servisi başlatıldı.", flush=True)
+    
+    while True:
+        try:
+            today_str = time.strftime("%Y%m%d")
+            api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
+            res = requests.get(api_url, timeout=10)
+            
+            if res.status_code == 200:
+                events = res.json().get("events", [])
+                for event in events:
+                    match_id = event.get("id")
+                    status_type = event.get("status", {}).get("type", {}).get("name", "")
+                    status_detail = event.get("status", {}).get("type", {}).get("shortDetail", "")
+                    
+                    competitors = event.get("competitions", [{}])[0].get("competitors", [])
+                    if len(competitors) >= 2:
+                        ev = competitors[0].get("team", {}).get("displayName", "")
+                        dep = competitors[1].get("team", {}).get("displayName", "")
+                        
+                        score_ev = int(competitors[0].get("score", 0))
+                        score_dep = int(competitors[1].get("score", 0))
+                        
+                        if match_id not in canli_takip_hafizasi:
+                            canli_takip_hafizasi[match_id] = {
+                                "ev": ev, "dep": dep,
+                                "score_ev": score_ev, "score_dep": score_dep,
+                                "status": status_type
+                            }
+                        else:
+                            eski = canli_takip_hafizasi[match_id]
+                            
+                            # Gol bildirimi kontrolü ve hangi takımın attığının tespiti
+                            if (score_ev != eski["score_ev"] or score_dep != eski["score_dep"]) and status_type == "STATUS_IN_PROGRESS":
+                                atan_takim = ev if score_ev > eski["score_ev"] else dep
+                                
+                                gol_mesaj = (
+                                    f"⚽ <b>GOL!</b> ⚽\n"
+                                    f"🎯 <b>Atan Takım:</b> {atan_takim}\n"
+                                    f"📊 <b>Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
+                                    f"⏱ <b>Dakika:</b> <code>{status_detail}</code>"
+                                )
+                                send_telegram_message(TELEGRAM_CHAT_ID, gol_mesaj)
+                                canli_takip_hafizasi[match_id]["score_ev"] = score_ev
+                                canli_takip_hafizasi[match_id]["score_dep"] = score_dep
+                            
+                            # Maç bitti bildirimi kontrolü
+                            if status_type == "STATUS_FINAL" and eski["status"] != "STATUS_FINAL":
+                                bitis_mesaj = (
+                                    f"🏁 <b>MAÇ SONUCU</b> 🏁\n"
+                                    f"📊 <b>Final Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
+                                    f"🏆 <i>Karşılaşma sona erdi.</i>"
+                                )
+                                send_telegram_message(TELEGRAM_CHAT_ID, bitis_mesaj)
+                                canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
+        except Exception as e:
+            print(f"Canlı takip döngüsü hatası: {e}", flush=True)
+            
+        time.sleep(120)  # Her 2 dakikada bir kontrol et
 
 # ================= ==========================================
-# 4. ARKA PLAN DÖNGÜSÜ
+# 4. ARKA PLAN DÖNGÜLERİ
 # ================= ==========================================
 def background_worker():
     daily_match_fetch()
     
-    status_msg = f"🤖 <b>AI Analiz Botu Aktif!</b>\nBültendeki <b>{len(hafiza_maclar)} maç</b> yapay zeka süzgecinden geçirildi.\nGruba <code>!b</code> yazarak profesyonel analiz raporunu alabilirsiniz."
+    status_msg = f"🤖 <b>AI Bülten & Canlı Takip Botu Aktif!</b>\nBültendeki <b>{len(hafiza_maclar)} maç</b> not defterine kaydedildi.\nGruba <code>!b</code> yazarak bülten dosyasını alabilirsin. Goller (atan takım ve dakika ile birlikte) ve maç sonuçları anlık olarak bildirilecektir."
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
+    
+    threading.Thread(target=live_match_monitor, daemon=True).start()
     
     son_gunluk_cekme = time.time()
     while True:
