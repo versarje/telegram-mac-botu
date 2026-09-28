@@ -41,9 +41,10 @@ def send_telegram_message(chat_id, message):
     }
     try:
         response = requests.post(url, json=payload, timeout=15)
+        print(f"[DEBUG] Telegram Mesaj Yanıtı: {response.status_code} - {response.text}", flush=True)
         return response.json()
     except Exception as e:
-        print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
+        print(f"[DEBUG HATA] Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
 # ================= ==========================================
@@ -91,6 +92,7 @@ def toplu_grok_analiz_uret(mac_listesi_text):
         f"Yanıtın KESİNLİKLE TÜRKÇE olmalıdır. Başka hiçbir yabancı dil veya ekstra açıklama ekleme."
     )
     try:
+        print("[DEBUG] Groq Toplu Analiz API isteği gönderiliyor...", flush=True)
         completion = groq_client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[
@@ -100,13 +102,16 @@ def toplu_grok_analiz_uret(mac_listesi_text):
             temperature=0.7,
             max_tokens=2500
         )
-        return completion.choices[0].message.content.strip()
+        cevap = completion.choices[0].message.content.strip()
+        print(f"[DEBUG] Groq Toplu Yanıt Alındı: {cevap[:100]}...", flush=True)
+        return cevap
     except Exception as e:
-        print(f"Groq Toplu API hata: {e}", flush=True)
+        print(f"[DEBUG HATA] Groq Toplu API hata: {e}", flush=True)
         return ""
 
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar, aktif_tahminler
+    print(f"[DEBUG] !b komutu işleniyor. Hafızadaki maç sayısı: {len(hafiza_maclar)}", flush=True)
     if not hafiza_maclar:
         send_telegram_message(chat_id, "⚠️ <b>Futbol bülteninde aktif maç bulunamadı.</b>")
         return
@@ -167,7 +172,7 @@ def bulten_metnini_gonder(chat_id):
                     else:
                         cikti_metni += kart
             except Exception as ex:
-                print(f"Satır ayrıştırma hatası: {ex}", flush=True)
+                print(f"[DEBUG HATA] Satır ayrıştırma hatası: {ex} | Satır: {satir}", flush=True)
                 continue
 
     if cikti_metni:
@@ -181,7 +186,9 @@ def t2_canli_analiz_gonder(chat_id):
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
+        print(f"[DEBUG] ESPN Canlı Maçlar API İsteği: {api_url}", flush=True)
         res = requests.get(api_url, timeout=12)
+        print(f"[DEBUG] ESPN Canlı Yanıt Kodu: {res.status_code}", flush=True)
         
         canli_maclar = []
         if res.status_code == 200:
@@ -199,6 +206,7 @@ def t2_canli_analiz_gonder(chat_id):
                         
                         canli_maclar.append(f"Maç: {ev} {score_ev} - {score_dep} {dep} | Dakika: {status_detail}")
         
+        print(f"[DEBUG] Bulunan aktif canlı maç sayısı: {len(canli_maclar)}", flush=True)
         if not canli_maclar:
             send_telegram_message(chat_id, "🔴 <b>Groq Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
             return
@@ -220,7 +228,8 @@ def t2_canli_analiz_gonder(chat_id):
                 max_tokens=3000
             )
             yorumlar = completion.choices[0].message.content.strip()
-        except:
+        except Exception as e:
+            print(f"[DEBUG HATA] Groq Canlı Analiz API Hatası: {e}", flush=True)
             yorumlar = "Canlı analiz şu an üretilemedi."
 
         if len(yorumlar) > 4000:
@@ -232,7 +241,7 @@ def t2_canli_analiz_gonder(chat_id):
             send_telegram_message(chat_id, f"🔴 <b>GROQ CANLI MAÇ YORUMLARI</b>\n\n<blockquote>{yorumlar}</blockquote>")
             
     except Exception as e:
-        print(f"Canlı analiz hata: {e}", flush=True)
+        print(f"[DEBUG HATA] Canlı analiz genel hata: {e}", flush=True)
         send_telegram_message(chat_id, "⚠️ Canlı analiz yapılırken bir hata oluştu.")
 
 # ================= ==========================================
@@ -240,15 +249,17 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Groq Toplu Analiz Futbol Botu Aktif!"
+    return "Groq Toplu Analiz Futbol Botu Aktif (Debug Modu Açık)!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     update = request.get_json()
+    print(f"[DEBUG] Gelen Webhook İstek Verisi: {update}", flush=True)
     if update and "message" in update:
         message_data = update["message"]
         text = message_data.get("text", "").strip().lower()
         chat_id = message_data.get("chat", {}).get("id")
+        print(f"[DEBUG] Gelen Mesaj: '{text}' | Chat ID: {chat_id}", flush=True)
         
         if text == "!b" and chat_id:
             bulten_metnini_gonder(chat_id)
@@ -269,12 +280,13 @@ flask_thread.start()
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Futbol bülteni taranıyor...", flush=True)
+    print("[DEBUG] Futbol bülteni taranıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
         res = requests.get(api_url, timeout=12)
+        print(f"[DEBUG] Günlük Bülten API Durum Kodu: {res.status_code}", flush=True)
         
         if res.status_code == 200:
             data = res.json()
@@ -313,14 +325,14 @@ def daily_match_fetch():
                         "lig": league_name, "kod": mac_kodu, "ev_sahibi": ev, "deplasman": dep, "saat": saat_formatli
                     })
     except Exception as e:
-        print(f"Futbol veri çekme hatası: {e}", flush=True)
+        print(f"[DEBUG HATA] Futbol veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı hafızaya alındı.", flush=True)
+    print(f"[DEBUG] Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi, aktif_tahminler
-    print("Futbol canlı skor, gol, devre arası ve maç sonu takip servisi aktif.", flush=True)
+    print("[DEBUG] Futbol canlı skor, gol, devre arası ve maç sonu takip servisi aktif.", flush=True)
     while True:
         try:
             today_str = time.strftime("%Y%m%d")
@@ -356,6 +368,7 @@ def live_match_monitor():
                                     f"📊 <b>Anlık Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}\n"
                                     f"⏱ <b>Dakika:</b> <code>{status_detail}</code>"
                                 )
+                                print(f"[DEBUG GOL] Gol algılandı: {ev} {score_ev}-{score_dep} {dep}", flush=True)
                                 send_telegram_message(TELEGRAM_CHAT_ID, gol_mesaj)
                                 canli_takip_hafizasi[match_id]["score_ev"] = score_ev
                                 canli_takip_hafizasi[match_id]["score_dep"] = score_dep
@@ -367,6 +380,7 @@ def live_match_monitor():
                                     f"⚔️ <b>{ev} vs {dep}</b>\n"
                                     f"📊 <b>Devre Skoru:</b> <b>{score_ev} - {score_dep}</b>"
                                 )
+                                print(f"[DEBUG HT] İlk yarı bitti: {ev} {score_ev}-{score_dep} {dep}", flush=True)
                                 send_telegram_message(TELEGRAM_CHAT_ID, ht_mesaj)
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_HALFTIME"
 
@@ -377,6 +391,7 @@ def live_match_monitor():
                                     f"⚔️ <b>{ev} vs {dep}</b>\n"
                                     f"📊 <b>Skor:</b> <b>{score_ev} - {score_dep}</b>"
                                 )
+                                print(f"[DEBUG 2Y] İkinci yarı başladı: {ev} {score_ev}-{score_dep} {dep}", flush=True)
                                 send_telegram_message(TELEGRAM_CHAT_ID, ikinci_yari_mesaj)
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_IN_PROGRESS"
                             
@@ -411,10 +426,11 @@ def live_match_monitor():
                                     f"🎯 <b>Yapay Zeka Tahmini:</b> {aktif_tahminler.get(anahtar, {}).get('tahmin', 'Yok')}\n"
                                     f"📌 <b>Sonuç:</b> <b>{tahmin_durumu}</b>"
                                 )
+                                print(f"[DEBUG MS] Maç bitti: {ev} {score_ev}-{score_dep} {dep} | Durum: {tahmin_durumu}", flush=True)
                                 send_telegram_message(TELEGRAM_CHAT_ID, bitis_mesaj)
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
         except Exception as e:
-            print(f"Canlı takip döngüsü hatası: {e}", flush=True)
+            print(f"[DEBUG HATA] Canlı takip döngüsü hatası: {e}", flush=True)
         time.sleep(60)
 
 def background_worker():
