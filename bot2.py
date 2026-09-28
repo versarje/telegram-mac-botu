@@ -32,8 +32,13 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. MODÜL A: NORMAL BÜLTEN & ORAN SİSTEMİ (!b) - METİN FORMATI
+# 2. MODÜL A: POPÜLER MAÇLAR & GÜN.AY.YIL BÜLTENİ (!b)
 # ================= ==========================================
+POPULER_LIGLER = [
+    "premier league", "süper lig", "la liga", "serie a", 
+    "bundesliga", "ligue 1", "champions league", "uefa champions league"
+]
+
 def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
     ev_lower = ev_sahibi.lower()
     dep_lower = deplasman.lower()
@@ -67,11 +72,12 @@ def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
     if not hafiza_maclar:
-        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı.</b>")
+        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif popüler maç bulunamadı.</b>")
         return
         
+    # Gün.Ay.Yıl formatı (Örn: 28.09.2026)
     tarih_str = datetime.now().strftime("%d.%m.%Y")
-    send_telegram_message(chat_id, f"⚽ <b>RESMİ İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    send_telegram_message(chat_id, f"⚽ <b>POPÜLER İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     ligler = {}
     for m in hafiza_maclar:
@@ -93,7 +99,7 @@ def bulten_metnini_gonder(chat_id):
         time.sleep(0.3)
 
 # ================= ==========================================
-# 3. MODÜL B: T2 CANLI ANALİZ SİSTEMİ (!t2) - METİN FORMATI
+# 3. MODÜL B: T2 CANLI ANALİZ SİSTEMİ (!t2)
 # ================= ==========================================
 def canli_mac_analiz_uret(ev_sahibi, deplasman, skor_ev, skor_dep, dakika_str):
     toplam_gol = skor_ev + skor_dep
@@ -171,7 +177,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Metin Tabanlı İddaa & T2 Canlı Bot Aktif!"
+    return "Popüler Maçlar & T2 Canlı Bot Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -198,11 +204,11 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ
+# 5. ARKA PLAN DÖNGÜLERİ (FİLTRELENMİŞ VERİ ÇEKME)
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Güncel iddaa bülteni maçları taranıyor...", flush=True)
+    print("Popüler iddaa bülteni maçları taranıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -222,6 +228,11 @@ def daily_match_fetch():
                 except:
                     pass
                 
+                # Sadece popüler liglerdeki maçları al
+                lig_kucuk = league_name.lower()
+                if not any(p in lig_kucuk for p in POPULER_LIGLER):
+                    continue
+
                 competitors = event.get("competitions", [{}])[0].get("competitors", [])
                 if len(competitors) >= 2:
                     ev = competitors[0].get("team", {}).get("displayName", "")
@@ -248,7 +259,7 @@ def daily_match_fetch():
         print(f"Veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} popüler maç hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -306,10 +317,10 @@ def background_worker():
     daily_match_fetch()
     
     status_msg = (
-        f"🤖 <b>Metin Tabanlı İddaa & T2 Canlı Bot Aktif!</b>\n\n"
+        f"🤖 <b>Popüler Maçlar & T2 Canlı Bot Aktif!</b>\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Günlük bülten ve oranlar (Metin/Alıntı)\n"
-        f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler (Metin/Alıntı)"
+        f"👉 <code>!b</code> -> Popüler ligler bülteni ve oranlar\n"
+        f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
