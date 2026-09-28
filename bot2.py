@@ -1,6 +1,5 @@
 import os
 import time
-import re
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -31,6 +30,15 @@ def send_telegram_message(chat_id, message):
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
+def send_telegram_photo(chat_id, photo_bytes, caption):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    files = {"photo": ("screenshot.png", photo_bytes, "image/png")}
+    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+    try:
+        requests.post(url, data=data, files=files, timeout=20)
+    except Exception as e:
+        print(f"Telegram fotoğraf gönderme hatası: {e}", flush=True)
+
 def format_hafiza_mesaji():
     if not hafiza_maclar:
         return "⚠️ <b>Google üzerindeki bugünün maçları taranıyor veya henüz maç bulunamadı...</b>"
@@ -50,7 +58,7 @@ def format_hafiza_mesaji():
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google Spor Widget Botu Aktif!"
+    return "Google Spor Widget Botu (Debug Modu) Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -75,17 +83,17 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 3. GOOGLE ARAMA WIDGET'INDAN MAÇLARI DETAYLI ÇEKME
+# 3. GOOGLE WIDGET DEBUG VE VERİ ÇEKME FONKSİYONU
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Google Arama Spor Widget'ına bağlanılıyor...", flush=True)
+    print("Google Arama Spor Widget'ına bağlanılıyor (DEBUG)...", flush=True)
     
     yeni_hafiza = []
+    debug_log = []
     
     try:
         with sync_playwright() as p:
-            # Playwright masaüstü Chrome profili simülasyonu
             browser = p.chromium.launch(
                 headless=True,
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -93,62 +101,61 @@ def daily_match_fetch():
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
                 locale="tr-TR",
-                viewport={'width': 1366, 'height': 768}
+                viewport={'width': 1280, 'height': 800}
             )
             page = context.new_page()
             
-            # Google Türkiye Futbol Maçları Arama Bağlantısı
-            google_url = "https://www.google.com/search?q=futbol+ma%C3%A7lar%C4%B1+bug%C3%BCn&hl=tr&gl=tr"
-            page.goto(google_url, timeout=60000, wait_until="networkidle")
+            google_url = "https://www.google.com/search?q=bugün+oynanacak+futbol+maçları&hl=tr&gl=tr"
+            page.goto(google_url, timeout=60000)
+            time.sleep(5)
             
-            # Dinamik widget bileşenlerinin yüklenmesini bekle
-            time.sleep(4)
+            # --- DEBUG BİLGİLERİ ---
+            page_title = page.title()
+            screenshot_bytes = page.screenshot(full_page=False)
+            html_content = page.content()
+            soup = BeautifulSoup(html_content, 'html.parser')
             
-            html = page.content()
-            soup = BeautifulSoup(html, 'html.parser')
+            debug_log.append(f"📌 <b>Sayfa Başlığı:</b> {page_title}")
+            debug_log.append(f"🔗 <b>URL:</b> {page.url}")
             
-            # Katman 1: Google Spor Kartı İçindeki Takım Alanları
-            teams_raw = [t.text.strip() for t in soup.find_all(attrs={"data-df-team-name": True})]
-            
-            # Katman 2: Klasik Google Spor Kapsayıcıları
-            if not teams_raw:
-                teams_raw = [t.text.strip() for t in soup.select('div.imso_mh__first-tn-blk, div.imso_mh__second-tn-blk, div.imso-g-first-team-name, div.imso-g-second-team-name, span.imso_mh__ft-name, span.imso_mh__st-name')]
-            
-            # Katman 3: Genel Tablo / Maç Satırları
-            if not teams_raw:
-                team_elements = soup.select('div.ellipsisize, span.ellipsisize')
-                teams_raw = [t.text.strip() for t in team_elements if len(t.text.strip()) > 2]
-
-            times_raw = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time, span.imso_post__time, div.imso_mh__scr-sb')]
-
-            # Çekilen Takımları Eşleştirme (Çiftler Halinde)
-            i = 0
-            while i < len(teams_raw) - 1:
-                ev = teams_raw[i]
-                dep = teams_raw[i+1]
+            # Google Güvenlik / CAPTCHA Kontrolü
+            if "recaptcha" in html_content.lower() or "sorry/index" in page.url.lower():
+                debug_log.append("🚨 <b>TEŞHİS:</b> Google IP'yi engelledi (CAPTCHA / Robot Kontrolü çıktı)!")
+            else:
+                # Element Kontrolleri
+                imso_count = len(soup.select('div.imso-g-board, div.imso_mh__match-row, div.K1q38b'))
+                team_count = len(soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name'))
                 
-                # Gereksiz/Tekrarlanan Metin Temizliği
-                if ev != dep and len(ev) > 1 and len(dep) > 1:
-                    saat_idx = i // 2
-                    saat = times_raw[saat_idx] if saat_idx < len(times_raw) else "Bugün"
-                    
+                debug_log.append(f"🔍 <b>Aramada Bulunan Widget Kart Sayısı:</b> {imso_count}")
+                debug_log.append(f"⚽ <b>Bulunan Takım Element Sayısı:</b> {team_count}")
+                
+                # Takımları çekmeyi dene
+                home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
+                away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
+                times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
+                
+                min_len = min(len(home_teams), len(away_teams))
+                for i in range(min_len):
                     yeni_hafiza.append({
-                        "ev_sahibi": ev,
-                        "deplasman": dep,
-                        "saat": saat,
-                        "tahmin": "2.5 Üst / Karşılıklı Gol Var"
+                        "ev_sahibi": home_teams[i],
+                        "deplasman": away_teams[i],
+                        "saat": times[i] if i < len(times) else "Bugün",
+                        "tahmin": "2.5 Üst / KG Var"
                     })
-                    i += 2
-                else:
-                    i += 1
-
+            
             browser.close()
             
+            # Telegram'a Ekran Görüntüsü ve Debug Raporunu Gönder
+            debug_text = "🛠 <b>GOOGLE WIDGET DEBUG RAPORU</b> 🛠\n\n" + "\n".join(debug_log)
+            send_telegram_photo(TELEGRAM_CHAT_ID, screenshot_bytes, debug_text)
+
     except Exception as e:
-        print(f"Google Widget verisi çekilirken hata oluştu: {e}", flush=True)
+        err_msg = f"❌ <b>Debug Hatası:</b> {str(e)}"
+        print(err_msg, flush=True)
+        send_telegram_message(TELEGRAM_CHAT_ID, err_msg)
         
     hafiza_maclar = yeni_hafiza
-    print(f"Google Widget üzerinden hafızaya toplam {len(hafiza_maclar)} maç kaydedildi.", flush=True)
+    print(f"Debug işlemi bitti. Hafızaya {len(hafiza_maclar)} maç kaydedildi.", flush=True)
 
 # ================= ==========================================
 # 4. ARKA PLAN DÖNGÜSÜ
@@ -156,13 +163,8 @@ def daily_match_fetch():
 def background_worker():
     daily_match_fetch()
     
-    # Başlangıç bildirimi gönder
-    status_msg = f"🤖 <b>Bot aktif edildi!</b>\nGoogle Spor Widget'ından {len(hafiza_maclar)} maç hafızaya alındı.\nGruba <code>!b</code> yazarak bülteni çağırabilirsiniz."
-    send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
-    
     son_gunluk_cekme = time.time()
     while True:
-        # 12 saatte bir hafızayı tazele
         if time.time() - son_gunluk_cekme >= 43200:
             daily_match_fetch()
             son_gunluk_cekme = time.time()
