@@ -1,5 +1,6 @@
 import os
 import time
+import re
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -49,7 +50,7 @@ def format_hafiza_mesaji():
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google Spor Widget Botu Aktif ve Çalışıyor!"
+    return "Google Spor Widget Botu Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -74,7 +75,7 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 3. GOOGLE ARAMA WIDGET'INDAN CANLI / GÜNÜN MAÇLARINI ÇEKME
+# 3. GOOGLE ARAMA WIDGET'INDAN MAÇLARI DETAYLI ÇEKME
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
@@ -84,56 +85,63 @@ def daily_match_fetch():
     
     try:
         with sync_playwright() as p:
-            # Headless Chrome başlat
+            # Playwright masaüstü Chrome profili simülasyonu
             browser = p.chromium.launch(
                 headless=True,
                 args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
                 locale="tr-TR",
-                viewport={'width': 1280, 'height': 800}
+                viewport={'width': 1366, 'height': 768}
             )
             page = context.new_page()
             
-            # Google TR günün futbol maçları araması
-            google_url = "https://www.google.com/search?q=bugün+oynanacak+futbol+maçları&hl=tr&gl=tr"
-            page.goto(google_url, timeout=60000, wait_until="domcontentloaded")
+            # Google Türkiye Futbol Maçları Arama Bağlantısı
+            google_url = "https://www.google.com/search?q=futbol+ma%C3%A7lar%C4%B1+bug%C3%BCn&hl=tr&gl=tr"
+            page.goto(google_url, timeout=60000, wait_until="networkidle")
             
-            # Dinamik widget elementlerinin yüklenmesini bekle
-            time.sleep(5)
+            # Dinamik widget bileşenlerinin yüklenmesini bekle
+            time.sleep(4)
             
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Google Spor Kartındaki Farklı Varyasyon Seçicileri
-            cards = soup.select('div.imso-g-board, div.imso-mh__match-row, div.K1q38b, div[data-ved]')
+            # Katman 1: Google Spor Kartı İçindeki Takım Alanları
+            teams_raw = [t.text.strip() for t in soup.find_all(attrs={"data-df-team-name": True})]
             
-            # Alternatif Esnek Seçiciler
-            home_teams = [t.text.strip() for t in soup.select('div.imso_mh__first-tn-blk, div.imso-g-first-team-name, span.imso_mh__ft-name, div[data-df-team-name]')]
-            away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name, span.imso_mh__st-name')]
-            times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time, span.imso_post__time')]
-
-            # Filtreleme ve Temizleme
-            home_teams = [h for h in home_teams if len(h) > 1]
-            away_teams = [a for a in away_teams if len(a) > 1]
-
-            min_length = min(len(home_teams), len(away_teams))
+            # Katman 2: Klasik Google Spor Kapsayıcıları
+            if not teams_raw:
+                teams_raw = [t.text.strip() for t in soup.select('div.imso_mh__first-tn-blk, div.imso_mh__second-tn-blk, div.imso-g-first-team-name, div.imso-g-second-team-name, span.imso_mh__ft-name, span.imso_mh__st-name')]
             
-            for i in range(min_length):
-                ev = home_teams[i]
-                dep = away_teams[i]
-                saat = times[i] if i < len(times) else "Bugün"
+            # Katman 3: Genel Tablo / Maç Satırları
+            if not teams_raw:
+                team_elements = soup.select('div.ellipsisize, span.ellipsisize')
+                teams_raw = [t.text.strip() for t in team_elements if len(t.text.strip()) > 2]
+
+            times_raw = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time, span.imso_post__time, div.imso_mh__scr-sb')]
+
+            # Çekilen Takımları Eşleştirme (Çiftler Halinde)
+            i = 0
+            while i < len(teams_raw) - 1:
+                ev = teams_raw[i]
+                dep = teams_raw[i+1]
                 
-                # Aynı takımın tekrarlanmasını önle
-                if ev != dep:
+                # Gereksiz/Tekrarlanan Metin Temizliği
+                if ev != dep and len(ev) > 1 and len(dep) > 1:
+                    saat_idx = i // 2
+                    saat = times_raw[saat_idx] if saat_idx < len(times_raw) else "Bugün"
+                    
                     yeni_hafiza.append({
                         "ev_sahibi": ev,
                         "deplasman": dep,
                         "saat": saat,
                         "tahmin": "2.5 Üst / Karşılıklı Gol Var"
                     })
-                
+                    i += 2
+                else:
+                    i += 1
+
             browser.close()
             
     except Exception as e:
@@ -146,7 +154,6 @@ def daily_match_fetch():
 # 4. ARKA PLAN DÖNGÜSÜ
 # ================= ==========================================
 def background_worker():
-    # Bot açılır açılmaz Google Widget'ı tara
     daily_match_fetch()
     
     # Başlangıç bildirimi gönder
@@ -155,7 +162,7 @@ def background_worker():
     
     son_gunluk_cekme = time.time()
     while True:
-        # 12 saatte bir Google'dan maç verilerini tazele
+        # 12 saatte bir hafızayı tazele
         if time.time() - son_gunluk_cekme >= 43200:
             daily_match_fetch()
             son_gunluk_cekme = time.time()
