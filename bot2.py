@@ -32,13 +32,8 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. MODÜL A: POPÜLER MAÇLAR & GÜN.AY.YIL BÜLTENİ (!b)
+# 2. MODÜL A: TÜM LİGLER & TÜRKİYE SAATİ BÜLTENİ (!b)
 # ================= ==========================================
-POPULER_LIGLER = [
-    "premier league", "süper lig", "la liga", "serie a", 
-    "bundesliga", "ligue 1", "champions league", "uefa champions league"
-]
-
 def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
     ev_lower = ev_sahibi.lower()
     dep_lower = deplasman.lower()
@@ -72,12 +67,12 @@ def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
     if not hafiza_maclar:
-        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif popüler maç bulunamadı.</b>")
+        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı.</b>")
         return
         
     # Gün.Ay.Yıl formatı (Örn: 28.09.2026)
     tarih_str = datetime.now().strftime("%d.%m.%Y")
-    send_telegram_message(chat_id, f"⚽ <b>POPÜLER İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    send_telegram_message(chat_id, f"⚽ <b>TÜM LİGLER İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     ligler = {}
     for m in hafiza_maclar:
@@ -88,7 +83,7 @@ def bulten_metnini_gonder(chat_id):
         for mac in sorted(mac_listesi, key=lambda x: x['saat']):
             lig_mesaj += (
                 f"<blockquote>"
-                f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']}</b>\n"
+                f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']} (TR)</b>\n"
                 f"📌 <b>{mac['ev_sahibi']} - {mac['deplasman']}</b>\n"
                 f"📊 <i>Oranlar:</i> MS 1: <code>{mac['oran_1']}</code> | MS 0: <code>{mac['oran_0']}</code> | MS 2: <code>{mac['oran_2']}</code>\n"
                 f"🎯 <b>Tahmin:</b> <i>{mac['tahmin']}</i>\n"
@@ -177,7 +172,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Popüler Maçlar & T2 Canlı Bot Aktif!"
+    return "Tüm Ligler & T2 Canlı Bot Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -204,11 +199,11 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ (FİLTRELENMİŞ VERİ ÇEKME)
+# 5. ARKA PLAN DÖNGÜLERİ (TÜM LİGLER + TÜRKİYE SAATİ)
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Popüler iddaa bülteni maçları taranıyor...", flush=True)
+    print("Tüm liglerin iddaa bülteni maçları taranıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -220,18 +215,13 @@ def daily_match_fetch():
             events = data.get("events", [])
             idx = 0
             for event in events:
-                league_name = "Özel Karşılaşmalar"
+                league_name = "Diğer Ligler"
                 try:
                     league_name = event.get("competitions", [{}])[0].get("tournament", {}).get("name") or \
                                   data.get("leagues", [{}])[0].get("name") or \
                                   event.get("season", {}).get("slug", "Genel Lig")
                 except:
                     pass
-                
-                # Sadece popüler liglerdeki maçları al
-                lig_kucuk = league_name.lower()
-                if not any(p in lig_kucuk for p in POPULER_LIGLER):
-                    continue
 
                 competitors = event.get("competitions", [{}])[0].get("competitors", [])
                 if len(competitors) >= 2:
@@ -243,6 +233,7 @@ def daily_match_fetch():
                     if date_str:
                         try:
                             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                            # Türkiye saatine (+3) dönüştürme
                             dt_tr = dt.astimezone(timezone(timedelta(hours=3)))
                             saat_formatli = dt_tr.strftime("%H:%M")
                         except:
@@ -259,7 +250,7 @@ def daily_match_fetch():
         print(f"Veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} popüler maç hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç (tüm ligler) hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -317,9 +308,9 @@ def background_worker():
     daily_match_fetch()
     
     status_msg = (
-        f"🤖 <b>Popüler Maçlar & T2 Canlı Bot Aktif!</b>\n\n"
+        f"🤖 <b>Tüm Ligler & T2 Canlı Bot Aktif!</b>\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Popüler ligler bülteni ve oranlar\n"
+        f"👉 <code>!b</code> -> Tüm ligler bülteni (TR Saati & Metin)\n"
         f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
