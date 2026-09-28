@@ -16,6 +16,27 @@ TELEGRAM_CHAT_ID = "-1003991937105"
 hafiza_maclar = []
 canli_takip_hafizasi = {}
 
+TURKCE_GUNLER = {
+    "Monday": "Pazartesi", "Tuesday": "Salı", "Wednesday": "Çarşamba",
+    "Thursday": "Perşembe", "Friday": "Cuma", "Saturday": "Cumartesi", "Sunday": "Pazar"
+}
+
+TURKCE_AYLAR = {
+    "January": "Ocak", "February": "Şubat", "March": "Mart", "April": "Nisan",
+    "May": "Mayıs", "June": "Haziran", "July": "Temmuz", "August": "Ağustos",
+    "September": "Eylül", "October": "Ekim", "November": "Kasım", "December": "Aralık"
+}
+
+def format_turkce_tarih(dt_obj):
+    gun_en = dt_obj.strftime("%A")
+    ay_en = dt_obj.strftime("%B")
+    gun_tr = TURKCE_GUNLER.get(gun_en, gun_en)
+    ay_tr = TURKCE_AYLAR.get(ay_en, ay_en)
+    tarih_kismik = dt_obj.strftime(f"%d/{ay_tr}/%Y") # Alternatif veya gg/aa/yyyy
+    # Tam istenen format: 01/01/2007 - Perşembe (Ay sayısal veya isimli istenebilir, gg/aa/yyyy dendiği için sayısal yapalım)
+     sayisal_tarih = dt_obj.strftime("%d/%m/%Y")
+    return f"{sayisal_tarih} - {gun_tr}"
+
 def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -32,8 +53,36 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. MODÜL A: TÜM LİGLER & TÜRKİYE SAATİ BÜLTENİ (!b)
+# 2. ÇEVİRİ VE DÜZENLEME FONKSİYONLARI
 # ================= ==========================================
+LIG_CEVIRI = {
+    "English Premier League": "İngiltere Premier Lig",
+    "Spanish La Liga": "İspanya La Liga",
+    "Italian Serie A": "İtalya Serie A",
+    "German Bundesliga": "Almanya Bundesliga",
+    "French Ligue 1": "Fransa Ligue 1",
+    "UEFA Champions League": "UEFA Şampiyonlar Ligi",
+    "UEFA Europa League": "UEFA Avrupa Ligi",
+    "Turkish Süper Lig": "Türkiye Süper Lig"
+}
+
+TAKIM_CEVIRI = {
+    "Real Madrid": "Real Madrid",
+    "Barcelona": "Barcelona",
+    "Manchester City": "Manchester City",
+    "Bayern Munich": "Bayern Münih",
+    "Paris Saint-Germain": "Paris Saint-Germain",
+    "Galatasaray": "Galatasaray",
+    "Fenerbahçe": "Fenerbahçe",
+    "Beşiktaş": "Beşiktaş"
+}
+
+def cevir_isim(isim, tur="takim"):
+    if tur == "lig":
+        return LIG_CEVIRI.get(isim, isim)
+    else:
+        return TAKIM_CEVIRI.get(isim, isim)
+
 def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
     ev_lower = ev_sahibi.lower()
     dep_lower = deplasman.lower()
@@ -70,9 +119,9 @@ def bulten_metnini_gonder(chat_id):
         send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı.</b>")
         return
         
-    # Gün.Ay.Yıl formatı (Örn: 28.09.2026)
-    tarih_str = datetime.now().strftime("%d.%m.%Y")
-    send_telegram_message(chat_id, f"⚽ <b>TÜM LİGLER İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    simdi_tr = datetime.now(timezone(timedelta(hours=3)))
+    tarih_str = format_turkce_tarih(simdi_tr)
+    send_telegram_message(chat_id, f"⚽ <b>İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     ligler = {}
     for m in hafiza_maclar:
@@ -134,8 +183,11 @@ def t2_canli_analiz_gonder(chat_id):
                     status_detail = event.get("status", {}).get("type", {}).get("shortDetail", "Devam Ediyor")
                     competitors = event.get("competitions", [{}])[0].get("competitors", [])
                     if len(competitors) >= 2:
-                        ev = competitors[0].get("team", {}).get("displayName", "")
-                        dep = competitors[1].get("team", {}).get("displayName", "")
+                        ev_ham = competitors[0].get("team", {}).get("displayName", "")
+                        dep_ham = competitors[1].get("team", {}).get("displayName", "")
+                        ev = cevir_isim(ev_ham, "takim")
+                        dep = cevir_isim(dep_ham, "takim")
+                        
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
@@ -172,7 +224,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Tüm Ligler & T2 Canlı Bot Aktif!"
+    return "Türkçe Karakter & Tarih Formatlı Bot Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -199,11 +251,11 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ (TÜM LİGLER + TÜRKİYE SAATİ)
+# 5. ARKA PLAN DÖNGÜLERİ
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Tüm liglerin iddaa bülteni maçları taranıyor...", flush=True)
+    print("Bülten maçları taranıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -215,25 +267,29 @@ def daily_match_fetch():
             events = data.get("events", [])
             idx = 0
             for event in events:
-                league_name = "Diğer Ligler"
+                league_ham = "Diğer Ligler"
                 try:
-                    league_name = event.get("competitions", [{}])[0].get("tournament", {}).get("name") or \
-                                  data.get("leagues", [{}])[0].get("name") or \
-                                  event.get("season", {}).get("slug", "Genel Lig")
+                    league_ham = event.get("competitions", [{}])[0].get("tournament", {}).get("name") or \
+                                 data.get("leagues", [{}])[0].get("name") or \
+                                 event.get("season", {}).get("slug", "Genel Lig")
                 except:
                     pass
+                
+                league_name = cevir_isim(league_ham, "lig")
 
                 competitors = event.get("competitions", [{}])[0].get("competitors", [])
                 if len(competitors) >= 2:
-                    ev = competitors[0].get("team", {}).get("displayName", "")
-                    dep = competitors[1].get("team", {}).get("displayName", "")
+                    ev_ham = competitors[0].get("team", {}).get("displayName", "")
+                    dep_ham = competitors[1].get("team", {}).get("displayName", "")
+                    
+                    ev = cevir_isim(ev_ham, "takim")
+                    dep = cevir_isim(dep_ham, "takim")
                     
                     date_str = event.get("date", "")
                     saat_formatli = "21:45"
                     if date_str:
                         try:
                             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                            # Türkiye saatine (+3) dönüştürme
                             dt_tr = dt.astimezone(timezone(timedelta(hours=3)))
                             saat_formatli = dt_tr.strftime("%H:%M")
                         except:
@@ -250,7 +306,7 @@ def daily_match_fetch():
         print(f"Veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç (tüm ligler) hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -269,8 +325,11 @@ def live_match_monitor():
                     status_detail = event.get("status", {}).get("type", {}).get("shortDetail", "")
                     competitors = event.get("competitions", [{}])[0].get("competitors", [])
                     if len(competitors) >= 2:
-                        ev = competitors[0].get("team", {}).get("displayName", "")
-                        dep = competitors[1].get("team", {}).get("displayName", "")
+                        ev_ham = competitors[0].get("team", {}).get("displayName", "")
+                        dep_ham = competitors[1].get("team", {}).get("displayName", "")
+                        ev = cevir_isim(ev_ham, "takim")
+                        dep = cevir_isim(dep_ham, "takim")
+                        
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
@@ -307,10 +366,14 @@ def live_match_monitor():
 def background_worker():
     daily_match_fetch()
     
+    simdi_tr = datetime.now(timezone(timedelta(hours=3)))
+    tarih_str = format_turkce_tarih(simdi_tr)
+    
     status_msg = (
-        f"🤖 <b>Tüm Ligler & T2 Canlı Bot Aktif!</b>\n\n"
+        f"🤖 <b>Bot Aktif!</b>\n\n"
+        f"📅 <b>Bugün:</b> {tarih_str}\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Tüm ligler bülteni (TR Saati & Metin)\n"
+        f"👉 <code>!b</code> -> Tüm ligler bülteni\n"
         f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
