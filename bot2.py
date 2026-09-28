@@ -1,5 +1,6 @@
 import os
 import time
+import traceback
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -24,7 +25,8 @@ def send_telegram_message(chat_id, message):
         "parse_mode": "HTML"
     }
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
+        print(f"Telegram mesaj yanıtı: {response.status_code}", flush=True)
         return response.json()
     except Exception as e:
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
@@ -32,12 +34,15 @@ def send_telegram_message(chat_id, message):
 
 def send_telegram_photo(chat_id, photo_bytes, caption):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    files = {"photo": ("screenshot.png", photo_bytes, "image/png")}
+    files = {"photo": ("screenshot.jpg", photo_bytes, "image/jpeg")}
     data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=data, files=files, timeout=20)
+        res = requests.post(url, data=data, files=files, timeout=30)
+        print(f"Telegram fotoğraf yanıtı: {res.status_code}", flush=True)
     except Exception as e:
         print(f"Telegram fotoğraf gönderme hatası: {e}", flush=True)
+        # Fotoğraf gitmezse en azından yazıyı düz mesaj olarak at
+        send_telegram_message(chat_id, f"{caption}\n\n⚠️ (Görsel gönderilemedi: {e})")
 
 def format_hafiza_mesaji():
     if not hafiza_maclar:
@@ -58,7 +63,7 @@ def format_hafiza_mesaji():
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google Spor Widget Botu (Debug Modu) Aktif!"
+    return "Google Spor Widget Botu (Debug Modu V2) Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -87,7 +92,10 @@ flask_thread.start()
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Google Arama Spor Widget'ına bağlanılıyor (DEBUG)...", flush=True)
+    print("Google Arama Spor Widget'ına bağlanılıyor (DEBUG V2)...", flush=True)
+    
+    # İşlem başladığını Telegram'a bildir
+    send_telegram_message(TELEGRAM_CHAT_ID, "🔄 <b>Google Tarama Başlatıldı...</b>\nSayfa yükleniyor, lütfen bekleyin.")
     
     yeni_hafiza = []
     debug_log = []
@@ -96,7 +104,12 @@ def daily_match_fetch():
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                args=[
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
             )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -105,34 +118,41 @@ def daily_match_fetch():
             )
             page = context.new_page()
             
-            google_url = "https://www.google.com/search?q=bugün+oynanacak+futbol+maçları&hl=tr&gl=tr"
-            page.goto(google_url, timeout=60000)
-            time.sleep(5)
+            google_url = "https://www.google.com/search?q=bug%C3%BCn+oynanacak+futbol+ma%C3%A7lar%C4%B1&hl=tr&gl=tr"
             
-            # --- DEBUG BİLGİLERİ ---
+            # Sayfaya git ve bekle
+            response = page.goto(google_url, timeout=45000, wait_until="domcontentloaded")
+            time.sleep(6)
+            
+            # Debug Bilgileri
             page_title = page.title()
-            screenshot_bytes = page.screenshot(full_page=False)
+            current_url = page.url
+            status_code = response.status if response else "Bilinmiyor"
+            
+            # Ekran Görüntüsü Yakala (Düşük boyutlu JPEG)
+            screenshot_bytes = page.screenshot(type="jpeg", quality=60, full_page=False)
             html_content = page.content()
             soup = BeautifulSoup(html_content, 'html.parser')
             
             debug_log.append(f"📌 <b>Sayfa Başlığı:</b> {page_title}")
-            debug_log.append(f"🔗 <b>URL:</b> {page.url}")
+            debug_log.append(f"📡 <b>HTTP Durum:</b> {status_code}")
+            debug_log.append(f"📄 <b>HTML Boyutu:</b> {len(html_content)} karakter")
             
-            # Google Güvenlik / CAPTCHA Kontrolü
-            if "recaptcha" in html_content.lower() or "sorry/index" in page.url.lower():
-                debug_log.append("🚨 <b>TEŞHİS:</b> Google IP'yi engelledi (CAPTCHA / Robot Kontrolü çıktı)!")
+            # Sayfa İçerik Teşhisi
+            if "recaptcha" in html_content.lower() or "sorry/index" in current_url.lower():
+                debug_log.append("🚨 <b>TEŞHİS:</b> Google IP'yi engelledi (CAPTCHA doğrulama sayfası)!")
+            elif "consent.google.com" in current_url.lower() or "çerez" in page_title.lower():
+                debug_log.append("⚠️ <b>TEŞHİS:</b> Google Çerez (Cookie) onay duvarına takıldı.")
             else:
-                # Element Kontrolleri
-                imso_count = len(soup.select('div.imso-g-board, div.imso_mh__match-row, div.K1q38b'))
-                team_count = len(soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name'))
+                # Muhtemel element sorguları
+                div_count = len(soup.find_all('div'))
+                debug_log.append(f"🔹 Sayfadaki Toplam Div Sayısı: {div_count}")
                 
-                debug_log.append(f"🔍 <b>Aramada Bulunan Widget Kart Sayısı:</b> {imso_count}")
-                debug_log.append(f"⚽ <b>Bulunan Takım Element Sayısı:</b> {team_count}")
-                
-                # Takımları çekmeyi dene
                 home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
                 away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
                 times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
+                
+                debug_log.append(f"⚽ <b>Tespit Edilen Takım Sayısı:</b> {len(home_teams)}")
                 
                 min_len = min(len(home_teams), len(away_teams))
                 for i in range(min_len):
@@ -145,12 +165,13 @@ def daily_match_fetch():
             
             browser.close()
             
-            # Telegram'a Ekran Görüntüsü ve Debug Raporunu Gönder
-            debug_text = "🛠 <b>GOOGLE WIDGET DEBUG RAPORU</b> 🛠\n\n" + "\n".join(debug_log)
+            # Rapor ve Görsel Gönderimi
+            debug_text = "🛠 <b>GOOGLE WIDGET DEBUG RAPORU (V2)</b> 🛠\n\n" + "\n".join(debug_log)
             send_telegram_photo(TELEGRAM_CHAT_ID, screenshot_bytes, debug_text)
 
     except Exception as e:
-        err_msg = f"❌ <b>Debug Hatası:</b> {str(e)}"
+        error_trace = traceback.format_exc()
+        err_msg = f"❌ <b>Playwright Hata Aldı:</b>\n<code>{str(e)}</code>\n\n<b>Detay:</b>\n<code>{error_trace[:500]}</code>"
         print(err_msg, flush=True)
         send_telegram_message(TELEGRAM_CHAT_ID, err_msg)
         
