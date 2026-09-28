@@ -74,20 +74,20 @@ def cevir_isim(isim, tur="takim"):
         return TAKIM_CEVIRI.get(isim, isim)
 
 def toplu_grok_analiz_uret(mac_listesi_text):
-    """Tüm maç listesini tek seferde Groq'a gönderip toplu tahmin alır"""
+    """Tüm maç listesini tek seferde Groq'a gönderip şık formatta tahmin alır"""
     prompt = (
         f"Sen profesyonel bir futbol analiz uzmanı ve iddaa yorumorusun. "
-        f"Aşağıda bugün oynanacak olan maçların bir listesi var. Her biri için kısa birer iddaa tahmini ve oranı üret.\n\n"
+        f"Aşağıda bugün oynanacak olan maçların bir listesi var. Her biri için kısa birer iddaa tahmini, oranı ve yorumu üret.\n\n"
         f"Maç Listesi:\n{mac_listesi_text}\n\n"
-        f"Lütfen her maç için şu formatı bozmadan yanıt ver:\n"
-        f"Kod: [Maç Kodu] | Oranlar: [MS1 - MS0 - MS2] | Tahmin: [...] | Yorum: [...]\n"
-        f"Aşırı uzun yazma, tam Telegram formatına uygun olsun."
+        f"Lütfen her maç için Kesinlikle şu formatı satır satır bozmadan kullan:\n"
+        f"KOD:[Maç Kodu] | ORAN:[MS1 - MS0 - MS2] | TAHMİN:[...] | YORUM:[...]\n"
+        f"Başka hiçbir ekstra açıklama ekleme, sadece yukarıdaki formatta her maç için bir satır yaz."
     )
     try:
         completion = groq_client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[
-                {"role": "system", "content": "Sen uzman bir futbol analistisin."},
+                {"role": "system", "content": "Sen uzman bir futbol analistisin ve kesinlikle istenen formatın dışına çıkmazsın."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -96,7 +96,7 @@ def toplu_grok_analiz_uret(mac_listesi_text):
         return completion.choices[0].message.content.strip()
     except Exception as e:
         print(f"Groq Toplu API hata: {e}", flush=True)
-        return "Toplu analiz şu an yüklenemedi."
+        return ""
 
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
@@ -109,17 +109,59 @@ def bulten_metnini_gonder(chat_id):
     send_telegram_message(chat_id, f"⚽ <b>GROQ TOPLU ANALİZLİ BÜLTEN</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     mac_metinleri = ""
+    mac_dict = {}
     for m in hafiza_maclar:
         mac_metinleri += f"Kod: {m['kod']} | Lig: {m['lig']} | Saat: {m['saat']} | Maç: {m['ev_sahibi']} vs {m['deplasman']}\n"
+        mac_dict[m['kod']] = m
     
     toplu_sonuc = toplu_grok_analiz_uret(mac_metinleri)
     
-    if len(toplu_sonuc) > 4000:
-        parcalar = [toplu_sonuc[i:i+4000] for i in range(0, len(toplu_sonuc), 4000)]
-        for p in parcalar:
-            send_telegram_message(chat_id, f"<blockquote>{p}</blockquote>")
-            time.sleep(0.5)
-    else:
+    # Gelen ham yanıtı parçalayıp şık kartlar haline getirelim
+    cikti_metni = ""
+    satirlar = toplu_sonuc.split('\n')
+    
+    for satir in satirlar:
+        if "KOD:" in satir:
+            try:
+                # Örn: KOD:501 | ORAN:[2.20 - 3.30 - 3.00] | TAHMİN:X | YORUM:Y
+                parcalar = satir.split('|')
+                kod_parca = [p for p in parcalar if "KOD:" in p][0]
+                oran_parca = [p for p in parcalar if "ORAN:" in p][0]
+                tahmin_parca = [p for p in parcalar if "TAHMİN:" in p][0]
+                yorum_parca = [p for p in parcalar if "YORUM:" in p][0]
+                
+                kod = kod_parca.split(':')[1].strip().replace(']', '').strip()
+                oranlar = oran_parca.split(':')[1].strip().replace('[', '').replace(']', '').strip()
+                tahmin = tahmin_parca.split(':')[1].strip().replace(']', '').strip()
+                yorum = yorum_parca.split(':')[1].strip().replace(']', '').strip()
+                
+                if kod in mac_dict:
+                    m_bilgi = mac_dict[kod]
+                    # Şık Kart Formatı
+                    kart = (
+                        f"🏆 <b>{m_bilgi['lig']}</b>\n"
+                        f"⏰ <b>Saat:</b> {m_bilgi['saat']} | 🔑 <b>Kod:</b> <code>{m_bilgi['kod']}</code>\n"
+                        f"⚔️ <b>{m_bilgi['ev_sahibi']} vs {m_bilgi['deplasman']}</b>\n"
+                        f"📊 <b>Oranlar:</b> <code>{oranlar}</code>\n"
+                        f"🎯 <b>Tahmin:</b> <b>{tahmin}</b>\n"
+                        f"💡 <i>Yorum: {yorum}</i>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    )
+                    
+                    if len(cikti_metni + kart) > 3900:
+                        send_telegram_message(chat_id, f"<blockquote>{cikti_metni}</blockquote>")
+                        cikti_metni = kart
+                        time.sleep(0.3)
+                    else:
+                        cikti_metni += kart
+            except Exception as ex:
+                print(f"Satır ayrıştırma hatası: {ex} -> Satır: {satir}", flush=True)
+                continue
+
+    if cikti_metni:
+        send_telegram_message(chat_id, f"<blockquote>{cikti_metni}</blockquote>")
+    elif toplu_sonuc:
+        # Eğer özel format tutmazsa ham metni doğrudan blok olarak basar
         send_telegram_message(chat_id, f"<blockquote>{toplu_sonuc}</blockquote>")
 
 # ================= ==========================================
