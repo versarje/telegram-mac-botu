@@ -85,7 +85,7 @@ def toplu_grok_analiz_uret(mac_listesi_text):
     )
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="gemma2-9b-it",
             messages=[
                 {"role": "system", "content": "Sen uzman bir futbol analistisin."},
                 {"role": "user", "content": prompt}
@@ -157,7 +157,7 @@ def t2_canli_analiz_gonder(chat_id):
         
         try:
             completion = groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="gemma2-9b-it",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000
             )
