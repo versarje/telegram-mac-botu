@@ -1,3 +1,20 @@
+import threading
+from flask import Flask
+
+# Render'ın healtcheck isteğine yanıt verecek dummy sunucu
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot aktif ve calisiyor!"
+
+def run_http():
+    app.run(host='0.0.0.0', port=10000)
+
+# Flask sunucusunu ayrı bir thread üzerinde başlat
+threading.Thread(target=run_http, daemon=True).start()
+
+# --- BURADAN SONRA SENİN BOT KODLARIN GELİYOR ---
 import asyncio
 import os
 from playwright.async_api import async_playwright
