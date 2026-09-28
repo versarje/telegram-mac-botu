@@ -21,20 +21,10 @@ TURKCE_GUNLER = {
     "Thursday": "Perşembe", "Friday": "Cuma", "Saturday": "Cumartesi", "Sunday": "Pazar"
 }
 
-TURKCE_AYLAR = {
-    "January": "Ocak", "February": "Şubat", "March": "Mart", "April": "Nisan",
-    "May": "Mayıs", "June": "Haziran", "July": "Temmuz", "August": "Ağustos",
-    "September": "Eylül", "October": "Ekim", "November": "Kasım", "December": "Aralık"
-}
-
 def format_turkce_tarih(dt_obj):
     gun_en = dt_obj.strftime("%A")
-    ay_en = dt_obj.strftime("%B")
     gun_tr = TURKCE_GUNLER.get(gun_en, gun_en)
-    ay_tr = TURKCE_AYLAR.get(ay_en, ay_en)
-    tarih_kismik = dt_obj.strftime(f"%d/{ay_tr}/%Y") # Alternatif veya gg/aa/yyyy
-    # Tam istenen format: 01/01/2007 - Perşembe (Ay sayısal veya isimli istenebilir, gg/aa/yyyy dendiği için sayısal yapalım)
-     sayisal_tarih = dt_obj.strftime("%d/%m/%Y")
+    sayisal_tarih = dt_obj.strftime("%d/%m/%Y")
     return f"{sayisal_tarih} - {gun_tr}"
 
 def send_telegram_message(chat_id, message):
@@ -224,7 +214,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Türkçe Karakter & Tarih Formatlı Bot Aktif!"
+    return "Bot Aktif ve Sorunsuz Çalışıyor!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
