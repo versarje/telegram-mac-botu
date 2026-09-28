@@ -52,7 +52,7 @@ def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
     devler = ["real madrid", "barcelona", "manchester city", "bayern", "psg", "galatasaray", "fenerbahçe", "beşiktaş", "liverpool", "arsenal", "inter", "milan", "juventus"]
     
     ev_guclu = any(dev in ev_lower for dev in devler)
-    dep_guclu = any(dev in dep_lower for dev in dep_guclu)
+    dep_guclu = any(dev in dep_lower for dev in devler)
     
     mac_kodu = str(400 + index)
     
@@ -83,7 +83,6 @@ def bulteni_gorsel_olarak_uret():
     baslik_h = 100
     footer_h = 50
     
-    # Her bir maç kartı için yükseklik (Detaylı iddaa görünümü için 190 piksel)
     satir_h = 190
     lig_baslik_h = 45
     
