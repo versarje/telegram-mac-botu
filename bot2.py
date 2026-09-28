@@ -1,5 +1,7 @@
 import os
 import time
+import csv
+import io
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -20,36 +22,64 @@ def send_telegram_message(chat_id, message):
     payload = {
         "chat_id": chat_id,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
     }
     try:
         response = requests.post(url, json=payload, timeout=15)
-        print(f"Telegram yanıtı: {response.status_code}", flush=True)
         return response.json()
     except Exception as e:
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
-def format_hafiza_mesaji():
+def send_telegram_document(chat_id, file_bytes, filename, caption):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    files = {"document": (filename, file_bytes, "text/csv")}
+    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+    try:
+        response = requests.post(url, data=data, files=files, timeout=30)
+        print(f"Telegram dosya yanıtı: {response.status_code}", flush=True)
+    except Exception as e:
+        print(f"Telegram dosya gönderme hatası: {e}", flush=True)
+
+def generate_and_send_csv(chat_id):
     if not hafiza_maclar:
-        return "⚠️ <b>Günün maçları taranıyor veya Google üzerinde henüz veri bulunamadı...</b>"
+        send_telegram_message(chat_id, "⚠️ <b>Henüz hafızada kaydedilmiş maç bulunamadı...</b>")
+        return
+
+    # CSV verisini bellekte (in-memory) oluşturuyoruz
+    output = io.StringIO()
+    # Excel'in Türkçe karakterleri (UTF-8 with BOM) doğrudan düzgün okuması için ekleme
+    output.write('\ufeff')
     
-    mesaj = f"📋 <b>GÜNÜN MAÇLARI VE TAHMİNLERİ ({len(hafiza_maclar)} Maç)</b> 📋\n\n"
+    writer = csv.writer(output, delimiter=';')
+    # Afilli başlık satırı
+    writer.writerow(['Sira', 'Ev Sahibi', 'Deplasman', 'Saat / Durum', 'Ozel Tahmin'])
+    
     for i, mac in enumerate(hafiza_maclar, 1):
-        mesaj += (
-            f"{i}. ⚽ <b>{mac['ev_sahibi']} vs {mac['deplasman']}</b>\n"
-            f"⏱ <b>Saat / Durum:</b> {mac['saat']}\n"
-            f"🎯 <b>Tahmin:</b> {mac['tahmin']}\n"
-            f"-----------------------------------\n"
-        )
-    return mesaj
+        writer.writerow([
+            i, 
+            mac['ev_sahibi'], 
+            mac['deplasman'], 
+            mac['saat'], 
+            mac['tahmin']
+        ])
+    
+    csv_bytes = output.getvalue().encode('utf-8-sig')
+    output.close()
+    
+    tarih_str = time.strftime("%d-%m-%Y")
+    filename = f"Gunun_Maclari_{tarih_str}.csv"
+    caption = f"📊 <b>GÜNÜN MAÇ BÜLTENİ VE TAHMİNLERİ</b>\n📅 Tarih: {tarih_str}\n⚽ Toplam Maç: <b>{len(hafiza_maclar)}</b>\n\n<i>Dosyayı Excel veya Google Sheets ile açarak detaylı inceleyebilirsiniz.</i>"
+    
+    send_telegram_document(chat_id, csv_bytes, filename, caption)
 
 # ================= ==========================================
 # 2. FLASK SERVER VE TELEGRAM WEBHOOK
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google Spor Widget Botu (bot2.py) Aktif ve Çalışıyor!"
+    return "Google Spor Widget Botu (CSV Modu) Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -61,8 +91,7 @@ def webhook():
         
         if text.lower() == "!b" and chat_id:
             print(f"!b komutu algılandı (Chat ID: {chat_id})", flush=True)
-            rapor = format_hafiza_mesaji()
-            send_telegram_message(chat_id, rapor)
+            generate_and_send_csv(chat_id)
             
     return jsonify({"status": "ok"}), 200
 
@@ -74,7 +103,7 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 3. KESİNTİSİZ VERİ ÇEKME FONKSİYONU (Requests + BS4)
+# 3. VERİ ÇEKME FONKSİYONU
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
@@ -82,7 +111,6 @@ def daily_match_fetch():
     
     yeni_hafiza = []
     
-    # Google'ı gerçek bir masaüstü tarayıcısı gibi taklit eden başlıklar
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -97,7 +125,6 @@ def daily_match_fetch():
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Google Spor Widget CSS Sınıfları
             home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
             away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
             times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
@@ -110,13 +137,9 @@ def daily_match_fetch():
                     "saat": times[i] if i < len(times) else "Bugün",
                     "tahmin": "2.5 Üst / KG Var"
                 })
-        else:
-            print(f"Google yanıt vermedi, HTTP Kodu: {response.status_code}", flush=True)
-
     except Exception as e:
         print(f"Veri çekme hatası: {e}", flush=True)
 
-    # Eğer Google HTML yanıtında sınıflar değişmişse ve 0 maç döndüyse yedek API'yi devreye al
     if not yeni_hafiza:
         print("Google alternatif yönteme geçiliyor...", flush=True)
         try:
@@ -148,15 +171,13 @@ def daily_match_fetch():
 # 4. ARKA PLAN DÖNGÜSÜ
 # ================= ==========================================
 def background_worker():
-    daily_match_fetch()
+    daily_match_filter = daily_match_fetch()
     
-    # Başlangıç bildirimi gönder
-    status_msg = f"🤖 <b>Bot2 Aktif Edildi!</b>\nGünün bülteninden <b>{len(hafiza_maclar)} maç</b> hafızaya alındı.\nGruba <code>!b</code> yazarak bülteni çağırabilirsiniz."
+    status_msg = f"🤖 <b>Bot2 (CSV Modu) Aktif Edildi!</b>\nGünün bülteninden <b>{len(hafiza_maclar)} maç</b> hafızaya alındı.\nGruba <code>!b</code> yazarak afilli CSV bültenini indirebilirsiniz."
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
     son_gunluk_cekme = time.time()
     while True:
-        # 12 saatte bir hafızayı güncelle
         if time.time() - son_gunluk_cekme >= 43200:
             daily_match_fetch()
             son_gunluk_cekme = time.time()
