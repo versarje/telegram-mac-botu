@@ -19,6 +19,7 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
+aktif_tahminler = {}  # Maç bazlı tahminleri tutacağımız hafıza
 
 TURKCE_GUNLER = {
     "Monday": "Pazartesi", "Tuesday": "Salı", "Wednesday": "Çarşamba",
@@ -99,7 +100,7 @@ def toplu_grok_analiz_uret(mac_listesi_text):
         return ""
 
 def bulten_metnini_gonder(chat_id):
-    global hafiza_maclar
+    global hafiza_maclar, aktif_tahminler
     if not hafiza_maclar:
         send_telegram_message(chat_id, "⚠️ <b>Futbol bülteninde aktif maç bulunamadı.</b>")
         return
@@ -116,14 +117,12 @@ def bulten_metnini_gonder(chat_id):
     
     toplu_sonuc = toplu_grok_analiz_uret(mac_metinleri)
     
-    # Gelen ham yanıtı parçalayıp şık kartlar haline getirelim
     cikti_metni = ""
     satirlar = toplu_sonuc.split('\n')
     
     for satir in satirlar:
         if "KOD:" in satir:
             try:
-                # Örn: KOD:501 | ORAN:[2.20 - 3.30 - 3.00] | TAHMİN:X | YORUM:Y
                 parcalar = satir.split('|')
                 kod_parca = [p for p in parcalar if "KOD:" in p][0]
                 oran_parca = [p for p in parcalar if "ORAN:" in p][0]
@@ -137,7 +136,16 @@ def bulten_metnini_gonder(chat_id):
                 
                 if kod in mac_dict:
                     m_bilgi = mac_dict[kod]
-                    # Şık Kart Formatı
+                    
+                    # Tahmini takip sistemine kaydet
+                    aktif_tahminler[m_bilgi['ev_sahibi'] + "-" + m_bilgi['deplasman']] = {
+                        "kod": kod,
+                        "ev": m_bilgi['ev_sahibi'],
+                        "dep": m_bilgi['deplasman'],
+                        "tahmin": tahmin,
+                        "lig": m_bilgi['lig']
+                    }
+                    
                     kart = (
                         f"🏆 <b>{m_bilgi['lig']}</b>\n"
                         f"⏰ <b>Saat:</b> {m_bilgi['saat']} | 🔑 <b>Kod:</b> <code>{m_bilgi['kod']}</code>\n"
@@ -161,7 +169,6 @@ def bulten_metnini_gonder(chat_id):
     if cikti_metni:
         send_telegram_message(chat_id, f"<blockquote>{cikti_metni}</blockquote>")
     elif toplu_sonuc:
-        # Eğer özel format tutmazsa ham metni doğrudan blok olarak basar
         send_telegram_message(chat_id, f"<blockquote>{toplu_sonuc}</blockquote>")
 
 # ================= ==========================================
@@ -297,8 +304,8 @@ def daily_match_fetch():
     print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı hafızaya alındı.", flush=True)
 
 def live_match_monitor():
-    global canli_takip_hafizasi
-    print("Futbol canlı skor ve gol takip servisi aktif.", flush=True)
+    global canli_takip_hafizasi, aktif_tahminler
+    print("Futbol canlı skor, gol ve tahmin takip servisi aktif.", flush=True)
     while True:
         try:
             today_str = time.strftime("%Y%m%d")
@@ -336,10 +343,44 @@ def live_match_monitor():
                                 canli_takip_hafizasi[match_id]["score_ev"] = score_ev
                                 canli_takip_hafizasi[match_id]["score_dep"] = score_dep
                             
+                            # Maç bittiğinde tahmini kontrol et
                             if status_type == "STATUS_FINAL" and eski["status"] != "STATUS_FINAL":
+                                anahtar = f"{ev}-{dep}"
+                                tahmin_durumu = "Tahmin Bulunamadı ℹ️"
+                                
+                                if anahtar in aktif_tahminler:
+                                    t_veri = aktif_tahminler[anahtar]
+                                    tahmin_metni = t_veri["tahmin"].lower()
+                                    
+                                    # Basit mantıksal tahmin doğrulama
+                                    kazanan = "beraberlik"
+                                    if score_ev > score_dep:
+                                        kazanan = ev.lower()
+                                    elif score_dep > score_ev:
+                                        kazanan = dep.lower()
+                                        
+                                    tuttu_mu = False
+                                    if "beraberlik" in tahmin_metni or "0" in tahmin_metni:
+                                        if score_ev == score_dep: tuttu_mu = True
+                                    elif ev.lower() in tahmin_metni or "ms 1" in tahmin_metni or "ev" in tahmin_metni:
+                                        if score_ev > score_dep: tuttu_mu = True
+                                    elif dep.lower() in tahmin_metni or "ms 2" in tahmin_metni or "deplasman" in tahmin_metni:
+                                        if score_dep > score_ev: tuttu_mu = True
+                                    else:
+                                        # Eğer isim eşleşiyorsa
+                                        if any(word in tahmin_metni for word in ev.lower().split()) and score_ev > score_dep:
+                                            tuttu_mu = True
+                                        elif any(word in tahmin_metni for word in dep.lower().split()) and score_dep > score_ev:
+                                            tuttu_mu = True
+
+                                    tahmin_durumu = "TUTTU ✅" if tuttu_mu else "TUTMADI ❌"
+
                                 bitis_mesaj = (
-                                    f"🏁 <b>MAÇ SONUCU</b> 🏁\n"
-                                    f"📊 <b>Final Skor:</b> {ev} <b>{score_ev} - {score_dep}</b> {dep}"
+                                    f"🏁 <b>MAÇ SONUCU & TAHMİN RAPORU</b> 🏁\n"
+                                    f"⚔️ <b>{ev} vs {dep}</b>\n"
+                                    f"📊 <b>Final Skor:</b> <b>{score_ev} - {score_dep}</b>\n"
+                                    f"🎯 <b>Yapay Zeka Tahmini:</b> {aktif_tahminler.get(anahtar, {}).get('tahmin', 'Yok')}\n"
+                                    f"📌 <b>Sonuç:</b> <b>{tahmin_durumu}</b>"
                                 )
                                 send_telegram_message(TELEGRAM_CHAT_ID, bitis_mesaj)
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
