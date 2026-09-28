@@ -86,7 +86,7 @@ def gemini_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
     )
     try:
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=prompt,
         )
         metin = response.text.strip()
@@ -149,7 +149,7 @@ def t2_canli_analiz_gonder(chat_id):
                         # Canlı maç için Gemini yorumu
                         prompt = f"Futbol Canlı Maç: {ev} {score_ev} - {score_dep} {dep}, Dakika: {status_detail}. Bu canlı durum için sonraki gol veya maç sonu tahmini yap (tek cümle)."
                         try:
-                            resp = gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                            resp = gemini_client.models.generate_content(model='gemini-3.8-flash', contents=prompt)
                             canli_yorum = resp.text.strip()
                         except:
                             canli_yorum = "Mücadele tempolu devam ediyor, sonraki golü atan avantajı yakalar."
