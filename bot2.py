@@ -84,29 +84,40 @@ def daily_match_fetch():
     
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            # Headless Chrome başlat
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                locale="tr-TR"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                locale="tr-TR",
+                viewport={'width': 1280, 'height': 800}
             )
             page = context.new_page()
             
-            # Google TR üzerinde günün futbol maçları araması
-            google_url = "https://www.google.com/search?q=bugün+oynanacak+futbol+maçları&hl=tr"
-            page.goto(google_url, timeout=60000)
+            # Google TR günün futbol maçları araması
+            google_url = "https://www.google.com/search?q=bugün+oynanacak+futbol+maçları&hl=tr&gl=tr"
+            page.goto(google_url, timeout=60000, wait_until="domcontentloaded")
             
-            # Google Widget öğelerinin yüklenmesini bekle
-            page.wait_for_timeout(4000)
+            # Dinamik widget elementlerinin yüklenmesini bekle
+            time.sleep(5)
             
             html = page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Google Spor Kartındaki Ev Sahibi ve Deplasman Takımları
-            home_teams = [t.text.strip() for t in soup.select('div.imso_mh__first-tn-blk, div.imso-g-first-team-name, span.imso_mh__ft-name')]
+            # Google Spor Kartındaki Farklı Varyasyon Seçicileri
+            cards = soup.select('div.imso-g-board, div.imso-mh__match-row, div.K1q38b, div[data-ved]')
+            
+            # Alternatif Esnek Seçiciler
+            home_teams = [t.text.strip() for t in soup.select('div.imso_mh__first-tn-blk, div.imso-g-first-team-name, span.imso_mh__ft-name, div[data-df-team-name]')]
             away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name, span.imso_mh__st-name')]
-            times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
+            times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time, span.imso_post__time')]
 
-            # Takım isimleri eşleşiyorsa listeye ekle
+            # Filtreleme ve Temizleme
+            home_teams = [h for h in home_teams if len(h) > 1]
+            away_teams = [a for a in away_teams if len(a) > 1]
+
             min_length = min(len(home_teams), len(away_teams))
             
             for i in range(min_length):
@@ -114,15 +125,14 @@ def daily_match_fetch():
                 dep = away_teams[i]
                 saat = times[i] if i < len(times) else "Bugün"
                 
-                # Tahmin Algoritması / Şablonu
-                tahmin = "2.5 Üst / Karşılıklı Gol Var"
-                
-                yeni_hafiza.append({
-                    "ev_sahibi": ev,
-                    "deplasman": dep,
-                    "saat": saat,
-                    "tahmin": tahmin
-                })
+                # Aynı takımın tekrarlanmasını önle
+                if ev != dep:
+                    yeni_hafiza.append({
+                        "ev_sahibi": ev,
+                        "deplasman": dep,
+                        "saat": saat,
+                        "tahmin": "2.5 Üst / Karşılıklı Gol Var"
+                    })
                 
             browser.close()
             
@@ -140,12 +150,13 @@ def background_worker():
     daily_match_fetch()
     
     # Başlangıç bildirimi gönder
-    send_telegram_message(TELEGRAM_CHAT_ID, "🤖 <b>Bot aktif edildi!</b>\nGoogle Spor Widget'ından maçlar hafızaya alındı. Gruba <code>!b</code> yazarak bülteni çağırabilirsiniz.")
+    status_msg = f"🤖 <b>Bot aktif edildi!</b>\nGoogle Spor Widget'ından {len(hafiza_maclar)} maç hafızaya alındı.\nGruba <code>!b</code> yazarak bülteni çağırabilirsiniz."
+    send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
     son_gunluk_cekme = time.time()
     while True:
-        # 24 saatte bir hafızayı Google'dan güncelle (86400 saniye)
-        if time.time() - son_gunluk_cekme >= 86400:
+        # 12 saatte bir Google'dan maç verilerini tazele
+        if time.time() - son_gunluk_cekme >= 43200:
             daily_match_fetch()
             son_gunluk_cekme = time.time()
         time.sleep(60)
