@@ -19,7 +19,7 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
-aktif_tahminler = {}  # Maç bazlı tahminleri tutacağımız hafıza
+aktif_tahminler = {}
 
 TURKCE_GUNLER = {
     "Monday": "Pazartesi", "Tuesday": "Salı", "Wednesday": "Çarşamba",
@@ -58,14 +58,22 @@ LIG_CEVIRI = {
     "French Ligue 1": "Fransa Ligue 1",
     "UEFA Champions League": "UEFA Şampiyonlar Ligi",
     "UEFA Europa League": "UEFA Avrupa Ligi",
-    "Turkish Süper Lig": "Türkiye Süper Lig"
+    "Turkish Süper Lig": "Türkiye Süper Lig",
+    "UEFA Nations League": "UEFA Uluslar Ligi",
+    "World Cup Qualifiers": "Dünya Kupası Elemeleri"
 }
 
 TAKIM_CEVIRI = {
     "Real Madrid": "Real Madrid", "Barcelona": "Barcelona",
     "Manchester City": "Manchester City", "Bayern Munich": "Bayern Münih",
     "Paris Saint-Germain": "Paris Saint-Germain", "Galatasaray": "Galatasaray",
-    "Fenerbahçe": "Fenerbahçe", "Beşiktaş": "Beşiktaş"
+    "Fenerbahçe": "Fenerbahçe", "Beşiktaş": "Beşiktaş",
+    "Georgia": "Gürcistan", "Ukraine": "Ukrayna",
+    "Armenia": "Ermenistan", "Montenegro": "Karadağ",
+    "Latvia": "Letonya", "Cyprus": "Güney Kıbrıs",
+    "Equatorial Guinea": "Ekvator Ginesi", "Sierra Leone": "Sierra Leone",
+    "Zimbabwe": "Zimbabve", "Democratic Republic of the Congo": "Kongo DC",
+    "Central African Republic": "Orta Afrika", "Burkina Faso": "Burkina Faso"
 }
 
 def cevir_isim(isim, tur="takim"):
@@ -75,20 +83,19 @@ def cevir_isim(isim, tur="takim"):
         return TAKIM_CEVIRI.get(isim, isim)
 
 def toplu_grok_analiz_uret(mac_listesi_text):
-    """Tüm maç listesini tek seferde Groq'a gönderip şık formatta tahmin alır"""
     prompt = (
         f"Sen profesyonel bir futbol analiz uzmanı ve iddaa yorumorusun. "
         f"Aşağıda bugün oynanacak olan maçların bir listesi var. Her biri için kısa birer iddaa tahmini, oranı ve yorumu üret.\n\n"
         f"Maç Listesi:\n{mac_listesi_text}\n\n"
         f"Lütfen her maç için Kesinlikle şu formatı satır satır bozmadan kullan:\n"
         f"KOD:[Maç Kodu] | ORAN:[MS1 - MS0 - MS2] | TAHMİN:[...] | YORUM:[...]\n"
-        f"Başka hiçbir ekstra açıklama ekleme, sadece yukarıdaki formatta her maç için bir satır yaz."
+        f"Yanıtın KESİNLİKLE TÜRKÇE olmalıdır. Başka hiçbir yabancı dil veya ekstra açıklama ekleme."
     )
     try:
         completion = groq_client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[
-                {"role": "system", "content": "Sen uzman bir futbol analistisin ve kesinlikle istenen formatın dışına çıkmazsın."},
+                {"role": "system", "content": "Sen tamamen Türkçe yanıt veren uzman bir futbol analistisin. İngilizce kelime asla kullanma."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -136,8 +143,6 @@ def bulten_metnini_gonder(chat_id):
                 
                 if kod in mac_dict:
                     m_bilgi = mac_dict[kod]
-                    
-                    # Tahmini takip sistemine kaydet
                     aktif_tahminler[m_bilgi['ev_sahibi'] + "-" + m_bilgi['deplasman']] = {
                         "kod": kod,
                         "ev": m_bilgi['ev_sahibi'],
@@ -163,22 +168,20 @@ def bulten_metnini_gonder(chat_id):
                     else:
                         cikti_metni += kart
             except Exception as ex:
-                print(f"Satır ayrıştırma hatası: {ex} -> Satır: {satir}", flush=True)
+                print(f"Satır ayrıştırma hatası: {ex}", flush=True)
                 continue
 
     if cikti_metni:
         send_telegram_message(chat_id, f"<blockquote>{cikti_metni}</blockquote>")
-    elif toplu_sonuc:
-        send_telegram_message(chat_id, f"<blockquote>{toplu_sonuc}</blockquote>")
 
 # ================= ==========================================
-# 3. MODÜL B: T2 CANLI YAPAY ZEKA ANALİZİ (!t2)
+# 3. MODÜL B: T2 CANLI YAPAY ZEKA ANALİZİ (!t2) - TÜM MAÇLAR
 # ================= ==========================================
 def t2_canli_analiz_gonder(chat_id):
-    send_telegram_message(chat_id, "🔴 <b>Groq T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
+    send_telegram_message(chat_id, "🔴 <b>Groq T2: Oynanan tüm canlı maçlar taranıyor ve yapay zeka Türkçe canlı analiz yapıyor...</b>")
     try:
         today_str = time.strftime("%Y%m%d")
-        api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
+        api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
         res = requests.get(api_url, timeout=12)
         
         canli_maclar = []
@@ -195,26 +198,40 @@ def t2_canli_analiz_gonder(chat_id):
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
-                        canli_maclar.append(f"{ev} {score_ev} - {score_dep} {dep} (Dakika: {status_detail})")
+                        canli_maclar.append(f"Maç: {ev} {score_ev} - {score_dep} {dep} | Dakika: {status_detail}")
         
         if not canli_maclar:
             send_telegram_message(chat_id, "🔴 <b>Groq Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
             return
             
         canli_text = "\n".join(canli_maclar)
-        prompt = f"Şu an oynanan canlı futbol maçları:\n{canli_text}\nBu maçların gidişatına göre kısa birer canlı iddaa yorumu yap."
+        prompt = (
+            f"Şu an oynanan canlı futbol maçlarının listesi aşağıdadır:\n{canli_text}\n\n"
+            f"Lütfen LİSTEDEKİ TÜM MAÇLAR için ayrı ayrı olacak şekilde, KESİNLİKLE TÜRKÇE dilinde kısa birer canlı iddaa analizi ve önerisi yap.\n"
+            f"Asla İngilizce kelime veya başlık kullanma. Her maç için takım isimlerini Türkçe yaz ve skor durumuna göre kısa yorumlar ve bahis fikirleri (Örn: Alt/Üst, Maç Sonu) ekle."
+        )
         
         try:
             completion = groq_client.chat.completions.create(
                 model="openai/gpt-oss-20b",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000
+                messages=[
+                    {"role": "system", "content": "Sen tamamen Türkçe yanıt veren uzman bir canlı iddaa analistisin."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=3000
             )
             yorumlar = completion.choices[0].message.content.strip()
         except:
             yorumlar = "Canlı analiz şu an üretilemedi."
 
-        send_telegram_message(chat_id, f"🔴 <b>GROK CANLI MAÇ YORUMLARI</b>\n\n<blockquote>{yorumlar}</blockquote>")
+        # Telegram karakter sınırını aşmaması için parçalayarak gönderelim
+        if len(yorumlar) > 4000:
+            parcalar = [yorumlar[i:i+4000] for i in range(0, len(yorumlar), 4000)]
+            for p in parcalar:
+                send_telegram_message(chat_id, f"🔴 <b>GROQ CANLI MAÇ YORUMLARI</b>\n\n<blockquote>{p}</blockquote>")
+                time.sleep(0.4)
+        else:
+            send_telegram_message(chat_id, f"🔴 <b>GROQ CANLI MAÇ YORUMLARI</b>\n\n<blockquote>{yorumlar}</blockquote>")
             
     except Exception as e:
         print(f"Canlı analiz hata: {e}", flush=True)
@@ -258,7 +275,7 @@ def daily_match_fetch():
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
-        api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
+        api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
         res = requests.get(api_url, timeout=12)
         
         if res.status_code == 200:
@@ -309,7 +326,7 @@ def live_match_monitor():
     while True:
         try:
             today_str = time.strftime("%Y%m%d")
-            api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
+            api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
             res = requests.get(api_url, timeout=10)
             
             if res.status_code == 200:
@@ -343,7 +360,6 @@ def live_match_monitor():
                                 canli_takip_hafizasi[match_id]["score_ev"] = score_ev
                                 canli_takip_hafizasi[match_id]["score_dep"] = score_dep
                             
-                            # Maç bittiğinde tahmini kontrol et
                             if status_type == "STATUS_FINAL" and eski["status"] != "STATUS_FINAL":
                                 anahtar = f"{ev}-{dep}"
                                 tahmin_durumu = "Tahmin Bulunamadı ℹ️"
@@ -352,13 +368,6 @@ def live_match_monitor():
                                     t_veri = aktif_tahminler[anahtar]
                                     tahmin_metni = t_veri["tahmin"].lower()
                                     
-                                    # Basit mantıksal tahmin doğrulama
-                                    kazanan = "beraberlik"
-                                    if score_ev > score_dep:
-                                        kazanan = ev.lower()
-                                    elif score_dep > score_ev:
-                                        kazanan = dep.lower()
-                                        
                                     tuttu_mu = False
                                     if "beraberlik" in tahmin_metni or "0" in tahmin_metni:
                                         if score_ev == score_dep: tuttu_mu = True
@@ -367,7 +376,6 @@ def live_match_monitor():
                                     elif dep.lower() in tahmin_metni or "ms 2" in tahmin_metni or "deplasman" in tahmin_metni:
                                         if score_dep > score_ev: tuttu_mu = True
                                     else:
-                                        # Eğer isim eşleşiyorsa
                                         if any(word in tahmin_metni for word in ev.lower().split()) and score_ev > score_dep:
                                             tuttu_mu = True
                                         elif any(word in tahmin_metni for word in dep.lower().split()) and score_dep > score_ev:
@@ -399,7 +407,7 @@ def background_worker():
         f"📅 <b>Bugün:</b> {tarih_str}\n\n"
         f"📌 <b>Komutlar:</b>\n"
         f"👉 <code>!b</code> -> Toplu Groq Tahminli Bülten\n"
-        f"👉 <code>!t2</code> -> Canlı Toplu Maç Yorumları"
+        f"👉 <code>!t2</code> -> Oynanan Tüm Canlı Maçların Türkçe Yorumları"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
