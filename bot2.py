@@ -4,18 +4,21 @@ import requests
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
-from google import genai
+from openai import OpenAI
 
 app = Flask(__name__)
 
 # ================= ==========================================
-# 1. AYARLAR VE GEMINI BAĞLANTISI
+# 1. AYARLAR VE XAI (GROK) BAĞLANTISI
 # ================= ==========================================
 TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
-# Gemini İstemcisi (Ortam değişkeninden API anahtarını alır)
-gemini_client = genai.Client()
+# xAI Grok İstemcisi (OpenAI uyumlu altyapı kullanır)
+grok_client = OpenAI(
+    api_key=os.environ.get("XAI_API_KEY"),
+    base_url="https://api.x.ai/v1"
+)
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
@@ -47,7 +50,7 @@ def send_telegram_message(chat_id, message):
         return None
 
 # ================= ==========================================
-# 2. FUTBOL ÇEVİRİ VE GEMINI YAPAY ZEKA TAHMİN SİSTEMİ
+# 2. FUTBOL ÇEVİRİ VE GROK YAPAY ZEKA TAHMİN SİSTEMİ
 # ================= ==========================================
 LIG_CEVIRI = {
     "English Premier League": "İngiltere Premier Lig",
@@ -73,8 +76,8 @@ def cevir_isim(isim, tur="takim"):
     else:
         return TAKIM_CEVIRI.get(isim, isim)
 
-def gemini_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
-    """Gemini yapay zekasına maç hakkında analiz ve tahmin sorar"""
+def grok_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
+    """xAI Grok modeli ile maç analizi ve tahmini üretir"""
     prompt = (
         f"Sen profesyonel bir futbol analiz uzmanı ve iddaa yorumorusun. "
         f"Lig: {lig_adi}, Ev Sahibi: {ev_sahibi}, Deplasman: {deplasman}. "
@@ -85,15 +88,19 @@ def gemini_mac_tahmini_uret(ev_sahibi, deplasman, lig_adi):
         f"Lütfen aşırı uzun yazma, tam Telegram formatına uygun olsun."
     )
     try:
-        response = gemini_client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=prompt,
+        completion = grok_client.chat.completions.create(
+            model="grok-beta",  # xAI model adı
+            messages=[
+                {"role": "system", "content": "Sen uzman bir futbol analistisin."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=300
         )
-        metin = response.text.strip()
-        return metin
+        return completion.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Gemini API hata: {e}", flush=True)
-        return "Oranlar: 2.10 - 3.10 - 2.80\nTahmin: 2.5 Alt\nYorum: Gemini analizi şu an yüklenemedi, standart sistem devrede."
+        print(f"Grok API hata: {e}", flush=True)
+        return "Oranlar: 2.10 - 3.10 - 2.80\nTahmin: 2.5 Alt\nYorum: Grok analizi geçici olarak yüklenemedi."
 
 def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
@@ -103,7 +110,7 @@ def bulten_metnini_gonder(chat_id):
         
     simdi_tr = datetime.now(timezone(timedelta(hours=3)))
     tarih_str = format_turkce_tarih(simdi_tr)
-    send_telegram_message(chat_id, f"⚽ <b>GEMİNİ DESTEKLİ FUTBOL BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    send_telegram_message(chat_id, f"⚽ <b>GROK (xAI) DESTEKLİ FUTBOL BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
     ligler = {}
     for m in hafiza_maclar:
@@ -116,17 +123,17 @@ def bulten_metnini_gonder(chat_id):
                 f"<blockquote>"
                 f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']} (TR)</b>\n"
                 f"📌 <b>{mac['ev_sahibi']} - {mac['deplasman']}</b>\n"
-                f"🤖 <b>Gemini Analizi:</b>\n{mac['gemini_analiz']}"
+                f"🤖 <b>Grok Analizi:</b>\n{mac['grok_analiz']}"
                 f"</blockquote>\n"
             )
         send_telegram_message(chat_id, lig_mesaj)
-        time.sleep(0.4)
+        time.sleep(0.5)
 
 # ================= ==========================================
 # 3. MODÜL B: T2 CANLI YAPAY ZEKA ANALİZİ (!t2)
 # ================= ==========================================
 def t2_canli_analiz_gonder(chat_id):
-    send_telegram_message(chat_id, "🔴 <b>Gemini T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
+    send_telegram_message(chat_id, "🔴 <b>Grok T2: Oynanan futbol maçları taranıyor ve yapay zeka canlı analiz yapıyor...</b>")
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}"
@@ -146,13 +153,16 @@ def t2_canli_analiz_gonder(chat_id):
                         score_ev = int(competitors[0].get("score", 0))
                         score_dep = int(competitors[1].get("score", 0))
                         
-                        # Canlı maç için Gemini yorumu
                         prompt = f"Futbol Canlı Maç: {ev} {score_ev} - {score_dep} {dep}, Dakika: {status_detail}. Bu canlı durum için sonraki gol veya maç sonu tahmini yap (tek cümle)."
                         try:
-                            resp = gemini_client.models.generate_content(model='gemini-3.8-flash', contents=prompt)
-                            canli_yorum = resp.text.strip()
+                            completion = grok_client.chat.completions.create(
+                                model="grok-beta",
+                                messages=[{"role": "user", "content": prompt}],
+                                max_tokens=150
+                            )
+                            canli_yorum = completion.choices[0].message.content.strip()
                         except:
-                            canli_yorum = "Mücadele tempolu devam ediyor, sonraki golü atan avantajı yakalar."
+                            canli_yorum = "Mücadele tempolu devam ediyor."
                         
                         canli_maclar.append({
                             "ev_sahibi": ev, "deplasman": dep,
@@ -161,16 +171,16 @@ def t2_canli_analiz_gonder(chat_id):
                         })
         
         if not canli_maclar:
-            send_telegram_message(chat_id, "🔴 <b>Gemini Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
+            send_telegram_message(chat_id, "🔴 <b>Grok Canlı Analiz:</b> Şu anda oynanan canlı futbol maçı bulunmuyor.")
             return
             
-        mesaj = "🔴 <b>GEMİNİ CANLI MAÇ YORUMLARI</b>\n\n"
+        mesaj = "🔴 <b>GROK CANLI MAÇ YORUMLARI</b>\n\n"
         for mac in canli_maclar:
             mesaj += (
                 f"<blockquote>"
                 f"⏱ <b>Dakika:</b> <code>{mac['dakika']}</code>\n"
                 f"📌 <b>{mac['ev_sahibi']}</b> <b>{mac['skor_ev']} - {mac['skor_dep']}</b> <b>{mac['deplasman']}</b>\n"
-                f"🤖 <b>Yapay Zeka Canlı Görüşü:</b> {mac['yorum']}"
+                f"🤖 <b>Canlı Görüş:</b> {mac['yorum']}"
                 f"</blockquote>\n"
             )
         send_telegram_message(chat_id, mesaj)
@@ -184,7 +194,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Gemini Destekli Futbol Botu Aktif!"
+    return "Grok (xAI) Destekli Futbol Botu Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -209,11 +219,11 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ (Futbol Bülteni & Gol Takibi)
+# 5. ARKA PLAN DÖNGÜLERİ
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Futbol bülteni ve Gemini analizleri hazırlanıyor...", flush=True)
+    print("Futbol bülteni ve Grok analizleri hazırlanıyor...", flush=True)
     yeni_hafiza = []
     try:
         today_str = time.strftime("%Y%m%d")
@@ -253,20 +263,18 @@ def daily_match_fetch():
                     idx += 1
                     mac_kodu = str(500 + idx)
                     
-                    # Her maç için Gemini yapay zeka analizini çağırıyoruz
-                    gemini_analiz = gemini_mac_tahmini_uret(ev, dep, league_name)
+                    grok_analiz = grok_mac_tahmini_uret(ev, dep, league_name)
                     
                     yeni_hafiza.append({
                         "lig": league_name, "kod": mac_kodu, "ev_sahibi": ev, "deplasman": dep,
-                        "saat": saat_formatli, "gemini_analiz": gemini_analiz
+                        "saat": saat_formatli, "grok_analiz": grok_analiz
                     })
-                    # API limitlerine takılmamak için minik bekleme
-                    time.sleep(0.5)
+                    time.sleep(0.4)
     except Exception as e:
         print(f"Futbol veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı Gemini analizleriyle hafızaya alındı.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} futbol maçı Grok analizleriyle hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -326,10 +334,10 @@ def background_worker():
     tarih_str = format_turkce_tarih(simdi_tr)
     
     status_msg = (
-        f"🤖 <b>Gemini Destekli Futbol Botu Aktif!</b>\n\n"
+        f"🤖 <b>Grok (xAI) Destekli Futbol Botu Aktif!</b>\n\n"
         f"📅 <b>Bugün:</b> {tarih_str}\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Gemini Tahminli Futbol Bülteni\n"
+        f"👉 <code>!b</code> -> Grok Tahminli Futbol Bülteni\n"
         f"👉 <code>!t2</code> -> Yapay Zeka Canlı Maç Yorumları"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
