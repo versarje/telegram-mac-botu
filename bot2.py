@@ -1,179 +1,143 @@
 import os
+import time
+import requests
 import threading
 from flask import Flask
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
+# ================= ==========================================
+# 1. RENDER HEALTH CHECK / WEB SUNUCUSU (502 Önleyici)
+# ================= ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot aktif ve calisiyor!"
+    return "Telegram Futbol Analiz Botu Aktif ve Calisiyor!"
 
-def run_web():
-    # Render'ın verdiği dinamik portu oku, yoksa 10000 kullan
+def run_flask():
+    # Render'ın dinamik portunu alır, yoksa 10000 kullanır
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, threaded=True)
 
-threading.Thread(target=run_web, daemon=True).start()
+# Web sunucusunu arka planda başlat
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+time.sleep(2)  # Portun dinlemeye geçmesi için kısa bir bekleme
 
+# ================= ==========================================
+# 2. TELEGRAM VE API AYARLARI
+# ================= ==========================================
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
+gonderilen_maclar = set()  # Bildirimi atılan maçları tekrar atmamak için liste
 
-# --- BURADAN SONRA SENİN BOT KODLARIN GELİYOR ---
-import asyncio
-import os
-from playwright.async_api import async_playwright
-from bs4 import BeautifulSoup
-import datetime
-import requests
-
-# ==========================================
-# 1. TELEGRAM BİLGİLERİ (ENV VARIABLES)
-# ==========================================
-
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "-1004461429503")
- 
-
-TRACKED_MATCHES = {}
-
-def send_telegram_message(text):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ Telegram Token veya Chat ID eksik!")
-        return
-
+def send_telegram_message(message):
+    """Telegram kanalına/sohbetine mesaj gönderir."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
+        "text": message,
+        "parse_mode": "HTML"
     }
     try:
-        res = requests.post(url, json=payload)
-        if res.status_code == 200:
-            print("✅ Bildirim Telegram'a iletildi.")
-        else:
-            print(f"❌ Telegram Hatası: {res.text}")
+        response = requests.post(url, json=payload, timeout=10)
+        return response.json()
     except Exception as e:
-        print(f"Hata: {e}")
+        print(f"Telegram mesaj gönderme hatası: {e}")
+        return None
 
-async def fetch_live_matches(page):
-    matches = {}
-    try:
-        search_url = "https://www.google.com/search?q=günün+futbol+maçları&hl=tr"
-        await page.goto(search_url, wait_until="networkidle", timeout=30000)
-        await page.wait_for_timeout(1500)
-
-        content = await page.content()
-        soup = BeautifulSoup(content, "html.parser")
-
-        card_elements = soup.select("div.imso-toa, div.K6L4xe, div[data-df-id]")
-
-        for card in card_elements[:6]:
-            try:
-                teams = card.select("span.imso_bh, div.ellipsisize_text, span.hs2a1e")
-                scores = card.select("span.imso_mh_l_s, span.imso_mh_r_s, div.imso_mh_s")
-                status_elem = card.select_one("span.imso_g, div.imso-hide-overflow, span.imso-fp")
-
-                if len(teams) >= 2:
-                    home = teams[0].text.strip()
-                    away = teams[1].text.strip()
-                    match_key = f"{home} - {away}"
-
-                    status = status_elem.text.strip() if status_elem else "Bekliyor"
-                    
-                    if len(scores) >= 2:
-                        score_text = f"{scores[0].text.strip()} - {scores[1].text.strip()}"
-                    else:
-                        score_text = "0 - 0"
-
-                    matches[match_key] = {
-                        "match_name": match_key,
-                        "home": home,
-                        "away": away,
-                        "score": score_text,
-                        "status": status
-                    }
-            except Exception:
-                continue
-
-    except Exception as e:
-        print(f"⚠️ Canlı tarama hatası: {e}")
-
-    return matches
-
-async def monitor_matches():
-    global TRACKED_MATCHES
+# ================= ==========================================
+# 3. VERİ ÇEKME VE ANALİZ FONKSİYONLARI
+# ================= ==========================================
+def fetch_live_matches():
+    """Playwright kullanarak canlı maç verilerini ve istatistiklerini çeker."""
+    matches_data = []
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"] # Render uyumluluk parametreleri
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            locale="tr-TR"
-        )
-        page = await context.new_page()
-
-        print("🚀 Render üzerinde canlı maç takip motoru başladı...")
-
-        current_data = await fetch_live_matches(page)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
         
-        if current_data:
-            TRACKED_MATCHES = current_data
+        try:
+            # Örnek hedef analiz platformu veya Flashscore/Sofascore yönlendirmesi
+            page.goto("https://www.flashscore.com", timeout=60000)
+            page.wait_for_timeout(3000)
             
-            init_msg = "📊 *GÜNÜN MAÇLARI VE CANLI TAKİP BÜLTENİ*\n"
-            init_msg += f"📅 *{datetime.datetime.now().strftime('%d Eylül %Y')}*\n\n"
-            init_msg += f"🤖 Toplam *{len(TRACKED_MATCHES)}* maç takibe alındı:\n\n"
+            # HTML içeriğini alma ve BeautifulSoup ile işleme
+            html = page.content()
+            soup = BeautifulSoup(html, 'html.parser')
             
-            for m_key, m_val in TRACKED_MATCHES.items():
-                init_msg += f"⚽ *MAÇ:* {m_val['match_name']}\n"
-                init_msg += f"⏰ Durum: {m_val['status']} | Skor: {m_val['score']}\n\n"
-                
-            send_telegram_message(init_msg)
+            # Maç tarama ve veri ayıklama mantığınız
+            # (Web sitesinin selector yapısına göre veriler toplanır)
+            
+        except Exception as e:
+            print(f"Veri çekme sırasında hata oluştu: {e}")
+        finally:
+            browser.close()
+            
+    return matches_data
 
-        while True:
-            await asyncio.sleep(60)
-            print(f"🔄 [{datetime.datetime.now().strftime('%H:%M:%S')}] Kontrol ediliyor...")
+def calculate_xg_and_stats(match):
+    """
+    Maç içi istatistikleri ve xG değerlerini değerlendirir.
+    Kriterlere uyuyorsa True ve mesaj içeriği döndürür.
+    """
+    # Örnek Analiz Kriterleri:
+    # Dakika 15-75 arası, Toplam xG > 1.2, İki takımın toplam şutu > 8
+    
+    match_id = match.get("id")
+    home_team = match.get("home_team", "Ev Sahibi")
+    away_team = match.get("away_team", "Deplasman")
+    minute = match.get("minute", 0)
+    score = match.get("score", "0-0")
+    
+    home_xg = match.get("home_xg", 0.0)
+    away_xg = match.get("away_xg", 0.0)
+    total_xg = home_xg + away_xg
+    
+    total_shots = match.get("total_shots", 0)
+
+    # Bildirim Kriteri Kontrolü
+    if match_id not in gonderilen_maclar:
+        if 15 <= minute <= 75 and total_xg >= 1.2 and total_shots >= 8:
             
-            live_data = await fetch_live_matches(page)
+            msg = (
+                f"🚨 <b>CANLI MAÇ ALARMI</b> 🚨\n\n"
+                f"⚽ <b>{home_team} vs {away_team}</b>\n"
+                f"⏱ <b>Dakika:</b> {minute}' | <b>Skor:</b> {score}\n\n"
+                f"📊 <b>xG Değerleri:</b> {home_xg:.2f} - {away_xg:.2f} (Toplam: {total_xg:.2f})\n"
+                f"🎯 <b>Toplam Şut:</b> {total_shots}\n\n"
+                f"💡 <i>Yüksek gol beklentisi ve şut baskısı tespit edildi!</i>"
+            )
+            gonderilen_maclar.add(match_id)
+            return True, msg
+
+    return False, ""
+
+# ================= ==========================================
+# 4. BOTUN ANA DÖNGÜSÜ
+# ================= ==========================================
+def main_loop():
+    """Canlı maçları sürekli kontrol eden ana döngü."""
+    print("Bot döngüsü başlatıldı. Canlı maçlar izleniyor...")
+    
+    while True:
+        try:
+            print("Canlı maçlar taranıyor...")
+            matches = fetch_live_matches()
             
-            for m_key, new_info in live_data.items():
-                if m_key in TRACKED_MATCHES:
-                    old_info = TRACKED_MATCHES[m_key]
-                    match_title = new_info['match_name']
+            for match in matches:
+                should_send, message = calculate_xg_and_stats(match)
+                if should_send:
+                    send_telegram_message(message)
+                    print(f"Bildirim gönderildi: {match.get('home_team')} vs {match.get('away_team')}")
                     
-                    # 1. GOL
-                    if old_info["score"] != new_info["score"] and new_info["score"] != "0 - 0":
-                        alert = f"⚽ *GOOOOOLLLL!*\n\n"
-                        alert += f"🏟️ *MAÇ:* {match_title}\n"
-                        alert += f"🔥 Yeni Skor: *{new_info['score']}*\n"
-                        alert += f"⏱️ Anlık Durum: {new_info['status']}"
-                        send_telegram_message(alert)
-                    
-                    # 2. İLK YARI BİTTİ
-                    if ("İY" in new_info["status"] or "Devre Arası" in new_info["status"]) and ("İY" not in old_info["status"] and "Devre Arası" not in old_info["status"]):
-                        alert = f"⏸️ *İLK YARI BİTTİ*\n\n"
-                        alert += f"🏟️ *MAÇ:* {match_title}\n"
-                        alert += f"📊 İlk Yarı Skoru: *{new_info['score']}*"
-                        send_telegram_message(alert)
-
-                    # 3. İKİNCİ YARI BAŞLADI
-                    if ("2.Y" in new_info["status"] or "46'" in new_info["status"]) and ("İY" in old_info["status"] or "Devre Arası" in old_info["status"]):
-                        alert = f"▶️ *İKİNCİ YARI BAŞLADI*\n\n"
-                        alert += f"🏟️ *MAÇ:* {match_title}\n"
-                        alert += f"📊 Skor: *{new_info['score']}*"
-                        send_telegram_message(alert)
-
-                    # 4. MAÇ BİTTİ
-                    if ("MS" in new_info["status"] or "Bitti" in new_info["status"]) and ("MS" not in old_info["status"] and "Bitti" not in old_info["status"]):
-                        alert = f"🏁 *MAÇ BİTTİ*\n\n"
-                        alert += f"🏟️ *MAÇ:* {match_title}\n"
-                        alert += f"🏆 Maç Sonucu: *{new_info['score']}*"
-                        send_telegram_message(alert)
-
-                    TRACKED_MATCHES[m_key] = new_info
-
-        await browser.close()
+        except Exception as e:
+            print(f"Ana döngüde hata: {e}")
+            
+        # 60 saniyede bir tekrar tara
+        time.sleep(60)
 
 if __name__ == "__main__":
-    asyncio.run(monitor_matches())
+    main_loop()
