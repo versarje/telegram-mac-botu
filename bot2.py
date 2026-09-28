@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-import cloudscraper
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
@@ -16,15 +15,6 @@ TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
-# Cloudflare / Akamai engelini aşmak için cloudscraper objesi oluşturuluyor
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
 
 hafiza_maclar = []
 canli_takip_hafizasi = {}
@@ -197,9 +187,7 @@ def t2_canli_analiz_gonder(chat_id):
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
         print(f"[DEBUG] ESPN Canlı Maçlar API İsteği: {api_url}", flush=True)
-        
-        # cloudscraper ile istek atılıyor
-        res = scraper.get(api_url, timeout=12)
+        res = requests.get(api_url, timeout=12)
         print(f"[DEBUG] ESPN Canlı Yanıt Kodu: {res.status_code}", flush=True)
         
         canli_maclar = []
@@ -297,9 +285,7 @@ def daily_match_fetch():
     try:
         today_str = time.strftime("%Y%m%d")
         api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
-        
-        # cloudscraper ile istek atılıyor
-        res = scraper.get(api_url, timeout=12)
+        res = requests.get(api_url, timeout=12)
         print(f"[DEBUG] Günlük Bülten API Durum Kodu: {res.status_code}", flush=True)
         
         if res.status_code == 200:
@@ -351,9 +337,7 @@ def live_match_monitor():
         try:
             today_str = time.strftime("%Y%m%d")
             api_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str}&limit=100"
-            
-            # cloudscraper ile istek atılıyor
-            res = scraper.get(api_url, timeout=10)
+            res = requests.get(api_url, timeout=10)
             
             if res.status_code == 200:
                 events = res.json().get("events", [])
