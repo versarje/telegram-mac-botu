@@ -320,7 +320,7 @@ def daily_match_fetch():
 
 def live_match_monitor():
     global canli_takip_hafizasi, aktif_tahminler
-    print("Futbol canlı skor, gol ve tahmin takip servisi aktif.", flush=True)
+    print("Futbol canlı skor, gol, devre arası ve maç sonu takip servisi aktif.", flush=True)
     while True:
         try:
             today_str = time.strftime("%Y%m%d")
@@ -346,6 +346,8 @@ def live_match_monitor():
                             }
                         else:
                             eski = canli_takip_hafizasi[match_id]
+                            
+                            # 1. GOL BİLDİRİMİ
                             if (score_ev != eski["score_ev"] or score_dep != eski["score_dep"]) and status_type == "STATUS_IN_PROGRESS":
                                 atan_takim = ev if score_ev > eski["score_ev"] else dep
                                 gol_mesaj = (
@@ -357,7 +359,28 @@ def live_match_monitor():
                                 send_telegram_message(TELEGRAM_CHAT_ID, gol_mesaj)
                                 canli_takip_hafizasi[match_id]["score_ev"] = score_ev
                                 canli_takip_hafizasi[match_id]["score_dep"] = score_dep
+
+                            # 2. İLK YARI BİTTİ (HT) BİLDİRİMİ
+                            if status_type == "STATUS_HALFTIME" and eski["status"] != "STATUS_HALFTIME":
+                                ht_mesaj = (
+                                    f"⏸ <b> İLK YARI SONUCU (DEVRE ARASI)</b>\n"
+                                    f"⚔️ <b>{ev} vs {dep}</b>\n"
+                                    f"📊 <b>Devre Skoru:</b> <b>{score_ev} - {score_dep}</b>"
+                                )
+                                send_telegram_message(TELEGRAM_CHAT_ID, ht_mesaj)
+                                canli_takip_hafizasi[match_id]["status"] = "STATUS_HALFTIME"
+
+                            # 3. İKİNCİ YARI BAŞLADI BİLDİRİMİ
+                            if status_type == "STATUS_IN_PROGRESS" and eski["status"] == "STATUS_HALFTIME":
+                                ikinci_yari_mesaj = (
+                                    f"▶️ <b> İKİNCİ YARI BAŞLADI!</b>\n"
+                                    f"⚔️ <b>{ev} vs {dep}</b>\n"
+                                    f"📊 <b>Skor:</b> <b>{score_ev} - {score_dep}</b>"
+                                )
+                                send_telegram_message(TELEGRAM_CHAT_ID, ikinci_yari_mesaj)
+                                canli_takip_hafizasi[match_id]["status"] = "STATUS_IN_PROGRESS"
                             
+                            # 4. MAÇ SONU BİLDİRİMİ VE TAHMİN RAPORU
                             if status_type == "STATUS_FINAL" and eski["status"] != "STATUS_FINAL":
                                 anahtar = f"{ev}-{dep}"
                                 tahmin_durumu = "Tahmin Bulunamadı ℹ️"
@@ -392,7 +415,7 @@ def live_match_monitor():
                                 canli_takip_hafizasi[match_id]["status"] = "STATUS_FINAL"
         except Exception as e:
             print(f"Canlı takip döngüsü hatası: {e}", flush=True)
-        time.sleep(60) # Süre 60 saniyeye (1 dakikaya) güncellendi
+        time.sleep(60)
 
 def background_worker():
     daily_match_fetch()
