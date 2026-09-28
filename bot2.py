@@ -85,7 +85,7 @@ def toplu_grok_analiz_uret(mac_listesi_text):
     )
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "Sen uzman bir futbol analistisin."},
                 {"role": "user", "content": prompt}
@@ -108,15 +108,12 @@ def bulten_metnini_gonder(chat_id):
     tarih_str = format_turkce_tarih(simdi_tr)
     send_telegram_message(chat_id, f"⚽ <b>GROQ TOPLU ANALİZLİ BÜLTEN</b>\n📅 <i>Tarih: {tarih_str}</i>")
     
-    # Tüm bülteni tek seferde yapay zekaya yollamak için metin formatına döküyoruz
     mac_metinleri = ""
     for m in hafiza_maclar:
         mac_metinleri += f"Kod: {m['kod']} | Lig: {m['lig']} | Saat: {m['saat']} | Maç: {m['ev_sahibi']} vs {m['deplasman']}\n"
     
-    # Tek istek atılıyor (Dakikalık 30 istek sınırına asla takılmaz)
     toplu_sonuc = toplu_grok_analiz_uret(mac_metinleri)
     
-    # Sonucu Telegram mesaj sınırına (4000 karakter) dikkat ederek parça parça veya doğrudan gönderelim
     if len(toplu_sonuc) > 4000:
         parcalar = [toplu_sonuc[i:i+4000] for i in range(0, len(toplu_sonuc), 4000)]
         for p in parcalar:
@@ -160,7 +157,7 @@ def t2_canli_analiz_gonder(chat_id):
         
         try:
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000
             )
