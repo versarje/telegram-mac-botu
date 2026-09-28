@@ -1,5 +1,4 @@
-flask
+playwright
+beautifulsoup4
 requests
-openpyxl
 gunicorn
-
