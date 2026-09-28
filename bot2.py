@@ -15,7 +15,7 @@ TELEGRAM_BOT_TOKEN = "8894398415:AAEY_ffz8iPL8qZ8vJq3bgat7cibeQFhvI8"
 TELEGRAM_CHAT_ID = "-1003991937105"
 
 hafiza_maclar = []
-canli_takip_hafizasi = {}  # Maçların anlık skor ve durumlarını takip etmek için
+canli_takip_hafizasi = {}
 DOSYA_ADI = "gunluk_futbol_analiz_bulteni.txt"
 
 def send_telegram_message(chat_id, message):
@@ -85,23 +85,39 @@ def bulteni_not_defterine_kaydet():
     tarih_str = datetime.now().strftime("%d.%m.%Y %H:%M")
     
     with open(DOSYA_ADI, "w", encoding="utf-8") as f:
-        f.write("=" * 60 + "\n")
-        f.write(f"  YAPAY ZEKA FUTBOL MAÇ & ANALİZ BÜLTENİ\n")
-        f.write(f"  Oluşturulma Tarihi: {tarih_str}\n")
-        f.write(f"  Toplam Maç Sayısı: {len(hafiza_maclar)}\n")
-        f.write("=" * 60 + "\n\n")
+        f.write("=" * 70 + "\n")
+        f.write(f"          YAPAY ZEKA FUTBOL MAÇ & ANALİZ BÜLTENİ\n")
+        f.write(f"          Tarih & Saat: {tarih_str}\n")
+        f.write("=" * 70 + "\n\n")
         
         if not hafiza_maclar:
             f.write("Şu anda sistemde aktif maç bulunmuyor.\n")
-        else:
-            for idx, mac in enumerate(hafiza_maclar, 1):
-                f.write(f"[{idx}] {mac['ev_sahibi']} vs {mac['deplasman']}\n")
-                f.write(f"    - Başlangıç Saati : {mac['saat']}\n")
-                f.write(f"    - Yapay Zeka Tahmini : {mac['tahmin']}\n")
-                f.write(f"    - Beklenen Skor      : {mac['skor']}\n")
-                f.write(f"    - Güven Oranı        : {mac['guven']}\n")
-                f.write(f"    - Detaylı Analiz     : {mac['analiz']}\n")
-                f.write("-" * 60 + "\n")
+            return
+
+        # Maçları liglerine göre gruplandıralım
+        ligler = {}
+        for mac in hafiza_maclar:
+            lig = mac['lig']
+            if lig not in ligler:
+                ligler[lig] = []
+            ligler[lig].append(mac)
+
+        # Her ligin içindeki maçları saate göre sıralayalım
+        for lig, mac_listesi in sorted(ligler.items()):
+            # Saate göre sıralama (Saat bilgisi 'HH:MM' formatında olduğu için doğrudan sıralanabilir)
+            mac_listesi_sirali = sorted(mac_listesi, key=lambda x: x['saat'])
+            
+            f.write(f"🏆 LİG / TURNUVA: {lig.upper()}\n")
+            f.write("-" * 70 + "\n")
+            
+            for idx, mac in enumerate(mac_listesi_sirali, 1):
+                f.write(f"  [{mac['saat']}] {mac['ev_sahibi']} vs {mac['deplasman']}\n")
+                f.write(f"       🎯 AI Tahmin      : {mac['tahmin']}\n")
+                f.write(f"       🔢 Beklenen Skor  : {mac['skor']}\n")
+                f.write(f"       📊 Güven Oranı    : {mac['guven']}\n")
+                f.write(f"       📝 Analiz Notu    : {mac['analiz']}\n")
+                f.write("  " + "-" * 66 + "\n")
+            f.write("\n")
 
 def bulten_dosyasini_gonder(chat_id):
     if not hafiza_maclar:
@@ -109,7 +125,7 @@ def bulten_dosyasini_gonder(chat_id):
         return
     
     bulteni_not_defterine_kaydet()
-    caption = f"📄 <b>Günlük Yapay Zeka Futbol Analiz Bülteni</b>\n📅 Tarih: {datetime.now().strftime('%d.%m.%Y')}\n🤖 Tüm maçlar ve detaylı analizler not defteri formatında hazırdır."
+    caption = f"📄 <b>Günlük Düzenli Futbol Analiz Bülteni</b>\n📅 Tarih: {datetime.now().strftime('%d.%m.%Y')}\n🤖 Liglerine göre gruplandırılmış ve saat sırasına dizilmiş not defteri hazırdır."
     send_telegram_document(chat_id, DOSYA_ADI, caption)
 
 # ================= ==========================================
@@ -117,7 +133,7 @@ def bulten_dosyasini_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Not Defteri & Gelişmiş Canlı Takip Botu Aktif!"
+    return "Düzenli Bülten & Canlı Takip Botu Aktif!"
 
 @app.route('/download', methods=['GET'])
 def download_file():
@@ -151,7 +167,7 @@ flask_thread.start()
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Güncel bülten taranıyor...", flush=True)
+    print("Güncel bülten lig ve saat bazlı taranıyor...", flush=True)
     
     yeni_hafiza = []
     try:
@@ -160,15 +176,26 @@ def daily_match_fetch():
         res = requests.get(api_url, timeout=12)
         
         if res.status_code == 200:
-            events = res.json().get("events", [])
+            data = res.json()
+            events = data.get("events", [])
+            
             for event in events:
+                # Lig adını ESPN verisinden çekiyoruz
+                league_name = "Diğer Maçlar / Özel Karşılaşmalar"
+                try:
+                    league_name = event.get("competitions", [{}])[0].get("tournament", {}).get("name") or \
+                                  data.get("leagues", [{}])[0].get("name") or \
+                                  event.get("season", {}).get("slug", "Genel Lig")
+                except:
+                    pass
+                
                 competitors = event.get("competitions", [{}])[0].get("competitors", [])
                 if len(competitors) >= 2:
                     ev = competitors[0].get("team", {}).get("displayName", "")
                     dep = competitors[1].get("team", {}).get("displayName", "")
                     
                     date_str = event.get("date", "")
-                    saat_formatli = "Canlı / Oynanıyor"
+                    saat_formatli = "23:59"  # Sıralama için varsayılan geç saat
                     if date_str:
                         try:
                             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
@@ -180,6 +207,7 @@ def daily_match_fetch():
                     tahmin, skor, guven, analiz = gelismis_ai_analiz_uret(ev, dep)
                     
                     yeni_hafiza.append({
+                        "lig": league_name,
                         "ev_sahibi": ev,
                         "deplasman": dep,
                         "saat": saat_formatli,
@@ -193,7 +221,7 @@ def daily_match_fetch():
 
     hafiza_maclar = yeni_hafiza
     bulteni_not_defterine_kaydet()
-    print(f"Bülten güncellendi. {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
+    print(f"Bülten lig gruplamasıyla güncellendi. Toplam {len(hafiza_maclar)} maç kaydedildi.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -229,7 +257,7 @@ def live_match_monitor():
                         else:
                             eski = canli_takip_hafizasi[match_id]
                             
-                            # Gol bildirimi kontrolü ve hangi takımın attığının tespiti
+                            # Gol bildirimi kontrolü
                             if (score_ev != eski["score_ev"] or score_dep != eski["score_dep"]) and status_type == "STATUS_IN_PROGRESS":
                                 atan_takim = ev if score_ev > eski["score_ev"] else dep
                                 
@@ -255,7 +283,7 @@ def live_match_monitor():
         except Exception as e:
             print(f"Canlı takip döngüsü hatası: {e}", flush=True)
             
-        time.sleep(120)  # Her 2 dakikada bir kontrol et
+        time.sleep(120)
 
 # ================= ==========================================
 # 4. ARKA PLAN DÖNGÜLERİ
@@ -263,7 +291,7 @@ def live_match_monitor():
 def background_worker():
     daily_match_fetch()
     
-    status_msg = f"🤖 <b>AI Bülten & Canlı Takip Botu Aktif!</b>\nBültendeki <b>{len(hafiza_maclar)} maç</b> not defterine kaydedildi.\nGruba <code>!b</code> yazarak bülten dosyasını alabilirsin. Goller (atan takım ve dakika ile birlikte) ve maç sonuçları anlık olarak bildirilecektir."
+    status_msg = f"🤖 <b>AI Düzenli Bülten & Canlı Takip Botu Aktif!</b>\nBültendeki <b>{len(hafiza_maclar)} maç</b> liglerine ve saatlerine göre düzenlenerek not defterine kaydedildi.\nGruba <code>!b</code> yazarak tertemiz bülten dosyasını alabilirsin."
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
     threading.Thread(target=live_match_monitor, daemon=True).start()
