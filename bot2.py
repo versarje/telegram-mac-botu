@@ -4,7 +4,6 @@ import requests
 import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
-from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 
@@ -32,20 +31,8 @@ def send_telegram_message(chat_id, message):
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
-def send_telegram_photo(chat_id, photo_path, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    try:
-        with open(photo_path, 'rb') as f:
-            files = {'photo': f}
-            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
-            response = requests.post(url, data=data, files=files, timeout=25)
-            return response.json()
-    except Exception as e:
-        print(f"Fotoğraf gönderme hatası: {e}", flush=True)
-        return None
-
 # ================= ==========================================
-# 2. MODÜL A: NORMAL BÜLTEN & ORAN SİSTEMİ (!b)
+# 2. MODÜL A: NORMAL BÜLTEN & ORAN SİSTEMİ (!b) - METİN FORMATI
 # ================= ==========================================
 def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
     ev_lower = ev_sahibi.lower()
@@ -77,111 +64,36 @@ def iddaa_analiz_ve_oran_uret(ev_sahibi, deplasman, index):
         
     return mac_kodu, oran_ms1, oran_ms0, oran_ms2, tahmin, yorum
 
-def bulteni_sayfali_gorsel_uret():
+def bulten_metnini_gonder(chat_id):
     global hafiza_maclar
-    tarih_str = datetime.now().strftime("%d.%m.%Y")
-    genislik = 950
-    baslik_h = 100
-    footer_h = 50
-    satir_h = 190
-    lig_baslik_h = 45
-    
-    uretilen_dosyalar = []
     if not hafiza_maclar:
-        img = Image.new("RGB", (genislik, 400), color="#0F172A")
-        draw = ImageDraw.Draw(img)
-        try:
-            font_baslik = ImageFont.truetype("arialbd.ttf", 22)
-            font_mac = ImageFont.truetype("arialbd.ttf", 15)
-        except:
-            font_baslik = ImageFont.load_default()
-            font_mac = ImageFont.load_default()
-            
-        draw.rectangle([(0, 0), (genislik, baslik_h)], fill="#1E293B")
-        draw.text((30, 22), "⚽ RESMİ İDDAA BÜLTENİ", fill="#38BDF8", font=font_baslik)
-        draw.text((50, 180), "Şu anda bültende aktif maç bulunmuyor.", fill="#FFFFFF", font=font_mac)
-        dosya_adi = "iddaa_bulteni_p1.png"
-        img.save(dosya_adi)
-        return [dosya_adi]
-
-    MASH_PER_PAGE = 4
-    sayfa_listeleri = [hafiza_maclar[i:i + MASH_PER_PAGE] for i in range(0, len(hafiza_maclar), MASH_PER_PAGE)]
-    toplam_sayfa = len(sayfa_listeleri)
-    
-    for idx, sayfa_maclari in enumerate(sayfa_listeleri):
-        sayfa_no = idx + 1
-        ligler = {}
-        for m in sayfa_maclari:
-            ligler.setdefault(m['lig'], []).append(m)
-        grup_sayisi = len(ligler)
-        
-        sayfa_h = baslik_h + footer_h + (len(sayfa_maclari) * satir_h) + (grup_sayisi * lig_baslik_h) + 40
-        img = Image.new("RGB", (genislik, max(sayfa_h, 500)), color="#0F172A")
-        draw = ImageDraw.Draw(img)
-        
-        try:
-            font_baslik = ImageFont.truetype("arialbd.ttf", 22)
-            font_lig = ImageFont.truetype("arialbd.ttf", 16)
-            font_mac = ImageFont.truetype("arialbd.ttf", 15)
-            font_detay = ImageFont.truetype("arial.ttf", 13)
-            font_kucuk = ImageFont.truetype("arial.ttf", 12)
-        except:
-            font_baslik = ImageFont.load_default()
-            font_lig = ImageFont.load_default()
-            font_mac = ImageFont.load_default()
-            font_detay = ImageFont.load_default()
-            font_kucuk = ImageFont.load_default()
-
-        draw.rectangle([(0, 0), (genislik, baslik_h)], fill="#1E293B")
-        draw.text((30, 22), f"⚽ RESMİ İDDAA BÜLTENİ (Sayfa {sayfa_no}/{toplam_sayfa})", fill="#38BDF8", font=font_baslik)
-        draw.text((30, 56), f"Tarih: {tarih_str}  |  Profesyonel Oran ve Tahmin Listesi", fill="#94A3B8", font=font_detay)
-        
-        y = baslik_h + 20
-        for lig, mac_listesi in sorted(ligler.items()):
-            draw.rectangle([(20, y), (genislik - 20, y + 35)], fill="#1E293B")
-            draw.text((35, y + 8), f"🏆 {lig.upper()}", fill="#F59E0B", font=font_lig)
-            y += 45
-            
-            for mac in sorted(mac_listesi, key=lambda x: x['saat']):
-                draw.rectangle([(20, y), (genislik - 20, y + 180)], fill="#1E293B")
-                draw.rectangle([(20, y), (130, y + 180)], fill="#334155")
-                draw.text((35, y + 60), f"Kod: {mac['kod']}", fill="#38BDF8", font=font_kucuk)
-                draw.text((35, y + 85), f"Saat: {mac['saat']}", fill="#FFFFFF", font=font_mac)
-                
-                mac_adi = f"{mac['ev_sahibi']}  -  {mac['deplasman']}"
-                draw.text((150, y + 15), mac_adi, fill="#FFFFFF", font=font_mac)
-                
-                oran_text = f"MS 1: {mac['oran_1']}   |   MS 0: {mac['oran_0']}   |   MS 2: {mac['oran_2']}"
-                draw.text((150, y + 45), oran_text, fill="#38BDF8", font=font_detay)
-                
-                draw.line([(150, y + 72), (genislik - 40, y + 72)], fill="#475569", width=1)
-                draw.text((150, y + 85), f"🎯 Tahmin: {mac['tahmin']}", fill="#4ADE80", font=font_detay)
-                draw.text((150, y + 115), f"💡 Yorum: {mac['yorum']}", fill="#CBD5E1", font=font_kucuk)
-                y += 190
-            y += 10
-
-        draw.rectangle([(0, img.height - footer_h), (genislik, img.height)], fill="#0F172A")
-        draw.text((30, img.height - 33), f"🤖 Otomatik İddaa Bülten Botu  |  Sayfa {sayfa_no} / {toplam_sayfa}", fill="#64748B", font=font_detay)
-
-        dosya_adi = f"iddaa_bulteni_p{sayfa_no}.png"
-        img.save(dosya_adi)
-        uretilen_dosyalar.append(dosya_adi)
-    return uretilen_dosyalar
-
-def bulten_gorsellerini_gonder(chat_id):
-    if not hafiza_maclar:
-        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı...</b>")
+        send_telegram_message(chat_id, "⚠️ <b>Bültende aktif maç bulunamadı.</b>")
         return
-    dosyalar = bulteni_sayfali_gorsel_uret()
-    toplam = len(dosyalar)
-    for idx, dosya in enumerate(dosyalar):
-        sayfa_no = idx + 1
-        caption = f"📊 <b>Günlük İddaa Bülteni (Sayfa {sayfa_no}/{toplam})</b>"
-        send_telegram_photo(chat_id, dosya, caption)
-        time.sleep(0.5)
+        
+    tarih_str = datetime.now().strftime("%d.%m.%Y")
+    send_telegram_message(chat_id, f"⚽ <b>RESMİ İDDAA BÜLTENİ</b>\n📅 <i>Tarih: {tarih_str}</i>")
+    
+    ligler = {}
+    for m in hafiza_maclar:
+        ligler.setdefault(m['lig'], []).append(m)
+        
+    for lig, mac_listesi in sorted(ligler.items()):
+        lig_mesaj = f"🏆 <b>{lig.upper()}</b>\n"
+        for mac in sorted(mac_listesi, key=lambda x: x['saat']):
+            lig_mesaj += (
+                f"<blockquote>"
+                f"<code>Kod: {mac['kod']}</code> | ⏰ <b>Saat: {mac['saat']}</b>\n"
+                f"📌 <b>{mac['ev_sahibi']} - {mac['deplasman']}</b>\n"
+                f"📊 <i>Oranlar:</i> MS 1: <code>{mac['oran_1']}</code> | MS 0: <code>{mac['oran_0']}</code> | MS 2: <code>{mac['oran_2']}</code>\n"
+                f"🎯 <b>Tahmin:</b> <i>{mac['tahmin']}</i>\n"
+                f"💡 <b>Yorum:</b> {mac['yorum']}"
+                f"</blockquote>\n"
+            )
+        send_telegram_message(chat_id, lig_mesaj)
+        time.sleep(0.3)
 
 # ================= ==========================================
-# 3. MODÜL B: T2 CANLI ANALİZ SİSTEMİ (!t2) - BAĞIMSIZ FONKSİYONLAR
+# 3. MODÜL B: T2 CANLI ANALİZ SİSTEMİ (!t2) - METİN FORMATI
 # ================= ==========================================
 def canli_mac_analiz_uret(ev_sahibi, deplasman, skor_ev, skor_dep, dakika_str):
     toplam_gol = skor_ev + skor_dep
@@ -204,83 +116,6 @@ def canli_mac_analiz_uret(ev_sahibi, deplasman, skor_ev, skor_dep, dakika_str):
         yorum = f"Dakika {dakika}: Skor dengede, takımlar kontrollü oynuyor."
         
     return tahmin, yorum
-
-def canli_bulten_gorseli_uret(canli_maclar):
-    genislik = 950
-    baslik_h = 100
-    footer_h = 50
-    satir_h = 160
-    
-    uretilen_dosyalar = []
-    if not canli_maclar:
-        img = Image.new("RGB", (genislik, 400), color="#0F172A")
-        draw = ImageDraw.Draw(img)
-        try:
-            font_baslik = ImageFont.truetype("arialbd.ttf", 22)
-            font_mac = ImageFont.truetype("arialbd.ttf", 15)
-        except:
-            font_baslik = ImageFont.load_default()
-            font_mac = ImageFont.load_default()
-            
-        draw.rectangle([(0, 0), (genislik, baslik_h)], fill="#1E293B")
-        draw.text((30, 22), "🔴 T2 CANLI MAÇLAR & ANLIK ANALİZLER", fill="#EF4444", font=font_baslik)
-        draw.text((50, 180), "Şu anda oynanan canlı maç bulunmuyor.", fill="#FFFFFF", font=font_mac)
-        dosya_adi = "t2_canli_p1.png"
-        img.save(dosya_adi)
-        return [dosya_adi]
-
-    MASH_PER_PAGE = 4
-    sayfa_listeleri = [canli_maclar[i:i + MASH_PER_PAGE] for i in range(0, len(canli_maclar), MASH_PER_PAGE)]
-    toplam_sayfa = len(sayfa_listeleri)
-    
-    for idx, sayfa_maclari in enumerate(sayfa_listeleri):
-        sayfa_no = idx + 1
-        sayfa_h = baslik_h + footer_h + (len(sayfa_maclari) * satir_h) + 30
-        
-        img = Image.new("RGB", (genislik, max(sayfa_h, 500)), color="#0F172A")
-        draw = ImageDraw.Draw(img)
-        
-        try:
-            font_baslik = ImageFont.truetype("arialbd.ttf", 22)
-            font_mac = ImageFont.truetype("arialbd.ttf", 15)
-            font_detay = ImageFont.truetype("arial.ttf", 13)
-            font_kucuk = ImageFont.truetype("arial.ttf", 12)
-        except:
-            font_baslik = ImageFont.load_default()
-            font_mac = ImageFont.load_default()
-            font_detay = ImageFont.load_default()
-            font_kucuk = ImageFont.load_default()
-
-        draw.rectangle([(0, 0), (genislik, baslik_h)], fill="#1E293B")
-        draw.text((30, 22), f"🔴 T2 CANLI ANALİZLER - Sayfa {sayfa_no}/{toplam_sayfa}", fill="#EF4444", font=font_baslik)
-        draw.text((30, 56), f"Bağımsız T2 Modülü | Anlık Skor ve Yapay Zeka Tahminleri", fill="#94A3B8", font=font_detay)
-        
-        y = baslik_h + 20
-        for mac in sayfa_maclari:
-            draw.rectangle([(20, y), (genislik - 20, y + 150)], fill="#1E293B")
-            
-            draw.rectangle([(20, y), (150, y + 150)], fill="#7F1D1D")
-            draw.text((30, y + 45), f"Dakika: {mac['dakika']}", fill="#FCA5A5", font=font_kucuk)
-            draw.text((30, y + 75), f"{mac['skor_ev']} - {mac['skor_dep']}", fill="#FFFFFF", font=font_baslik)
-            
-            mac_adi = f"{mac['ev_sahibi']}  vs  {mac['deplasman']}"
-            draw.text((170, y + 15), mac_adi, fill="#FFFFFF", font=font_mac)
-            
-            draw.line([(170, y + 45), (genislik - 40, y + 45)], fill="#475569", width=1)
-            
-            draw.text((170, y + 60), f"⚡ Canlı Tahmin: {mac['tahmin']}", fill="#4ADE80", font=font_detay)
-            draw.text((170, y + 95), f"💡 Canlı Yorum: {mac['yorum']}", fill="#CBD5E1", font=font_kucuk)
-            
-            y += 160
-
-        draw.rectangle([(0, img.height - footer_h), (genislik, img.height)], fill="#0F172A")
-        draw.text((30, img.height - 33), f"🤖 T2 Bağımsız Canlı Bot  |  Sayfa {sayfa_no} / {toplam_sayfa}", fill="#64748B", font=font_detay)
-
-        dosya_adi = f"t2_canli_p{sayfa_no}.png"
-        img.save(dosya_adi)
-        uretilen_dosyalar.append(dosya_adi)
-        
-    return uretilen_dosyalar
 
 def t2_canli_analiz_gonder(chat_id):
     send_telegram_message(chat_id, "🔴 <b>T2 Bot: Canlı maçlar taranıyor ve anlık analiz yapılıyor...</b>")
@@ -306,22 +141,26 @@ def t2_canli_analiz_gonder(chat_id):
                         tahmin, yorum = canli_mac_analiz_uret(ev, dep, score_ev, score_dep, status_detail)
                         
                         canli_maclar.append({
-                            "ev_sahibi": ev,
-                            "deplasman": dep,
-                            "skor_ev": score_ev,
-                            "skor_dep": score_dep,
-                            "dakika": status_detail,
-                            "tahmin": tahmin,
-                            "yorum": yorum
+                            "ev_sahibi": ev, "deplasman": dep,
+                            "skor_ev": score_ev, "skor_dep": score_dep,
+                            "dakika": status_detail, "tahmin": tahmin, "yorum": yorum
                         })
         
-        dosyalar = canli_bulten_gorseli_uret(canli_maclar)
-        toplam = len(dosyalar)
-        for idx, dosya in enumerate(dosyalar):
-            sayfa_no = idx + 1
-            caption = f"🔴 <b>T2 Canlı Maç Analizleri (Sayfa {sayfa_no}/{toplam})</b>"
-            send_telegram_photo(chat_id, dosya, caption)
-            time.sleep(0.5)
+        if not canli_maclar:
+            send_telegram_message(chat_id, "🔴 <b>T2 Canlı Analiz:</b> Şu anda oynanan canlı maç bulunmuyor.")
+            return
+            
+        mesaj = "🔴 <b>T2 CANLI MAÇLAR & ANLIK ANALİZLER</b>\n\n"
+        for mac in canli_maclar:
+            mesaj += (
+                f"<blockquote>"
+                f"⏱ <b>Dakika:</b> <code>{mac['dakika']}</code>\n"
+                f"📌 <b>{mac['ev_sahibi']}</b> <b>{mac['skor_ev']} - {mac['skor_dep']}</b> <b>{mac['deplasman']}</b>\n"
+                f"⚡ <b>Canlı Tahmin:</b> <i>{mac['tahmin']}</i>\n"
+                f"💡 <b>Yorum:</b> {mac['yorum']}"
+                f"</blockquote>\n"
+            )
+        send_telegram_message(chat_id, mesaj)
             
     except Exception as e:
         print(f"T2 Canlı analiz hatası: {e}", flush=True)
@@ -332,7 +171,7 @@ def t2_canli_analiz_gonder(chat_id):
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "İddaa Bülten & T2 Canlı Analiz Botu (Birleştirilmiş) Aktif!"
+    return "Metin Tabanlı İddaa & T2 Canlı Bot Aktif!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -344,7 +183,7 @@ def webhook():
         
         if text == "!b" and chat_id:
             print(f"!b komutu algılandı (Chat ID: {chat_id})", flush=True)
-            bulten_gorsellerini_gonder(chat_id)
+            bulten_metnini_gonder(chat_id)
         elif text == "!t2" and chat_id:
             print(f"T2 Modülü: !t2 komutu algılandı (Chat ID: {chat_id})", flush=True)
             t2_canli_analiz_gonder(chat_id)
@@ -359,7 +198,7 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 5. ARKA PLAN DÖNGÜLERİ (GÜNLÜK VERİ VE CANLI GOL TAKİBİ)
+# 5. ARKA PLAN DÖNGÜLERİ
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
@@ -409,8 +248,7 @@ def daily_match_fetch():
         print(f"Veri çekme hatası: {e}", flush=True)
 
     hafiza_maclar = yeni_hafiza
-    bulteni_sayfali_gorsel_uret()
-    print(f"Bülten hazırlandı. Toplam {len(hafiza_maclar)} maç işlendi.", flush=True)
+    print(f"Bülten güncellendi. Toplam {len(hafiza_maclar)} maç hafızaya alındı.", flush=True)
 
 def live_match_monitor():
     global canli_takip_hafizasi
@@ -468,10 +306,10 @@ def background_worker():
     daily_match_fetch()
     
     status_msg = (
-        f"🤖 <b>Resmi İddaa ve T2 Canlı Bot Aktif!</b>\n\n"
+        f"🤖 <b>Metin Tabanlı İddaa & T2 Canlı Bot Aktif!</b>\n\n"
         f"📌 <b>Komutlar:</b>\n"
-        f"👉 <code>!b</code> -> Günlük bülten ve oranlar (Sayfalı Görsel)\n"
-        f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler (Sayfalı Görsel)"
+        f"👉 <code>!b</code> -> Günlük bülten ve oranlar (Metin/Alıntı)\n"
+        f"👉 <code>!t2</code> -> Canlı maçlar ve anlık analizler (Metin/Alıntı)"
     )
     send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
     
