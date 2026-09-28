@@ -1,11 +1,9 @@
 import os
 import time
-import traceback
 import requests
 import threading
 from flask import Flask, request, jsonify
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
@@ -26,29 +24,17 @@ def send_telegram_message(chat_id, message):
     }
     try:
         response = requests.post(url, json=payload, timeout=15)
-        print(f"Telegram mesaj yanıtı: {response.status_code}", flush=True)
+        print(f"Telegram yanıtı: {response.status_code}", flush=True)
         return response.json()
     except Exception as e:
         print(f"Telegram mesaj gönderme hatası: {e}", flush=True)
         return None
 
-def send_telegram_photo(chat_id, photo_bytes, caption):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    files = {"photo": ("screenshot.jpg", photo_bytes, "image/jpeg")}
-    data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
-    try:
-        res = requests.post(url, data=data, files=files, timeout=30)
-        print(f"Telegram fotoğraf yanıtı: {res.status_code}", flush=True)
-    except Exception as e:
-        print(f"Telegram fotoğraf gönderme hatası: {e}", flush=True)
-        # Fotoğraf gitmezse en azından yazıyı düz mesaj olarak at
-        send_telegram_message(chat_id, f"{caption}\n\n⚠️ (Görsel gönderilemedi: {e})")
-
 def format_hafiza_mesaji():
     if not hafiza_maclar:
-        return "⚠️ <b>Google üzerindeki bugünün maçları taranıyor veya henüz maç bulunamadı...</b>"
+        return "⚠️ <b>Günün maçları taranıyor veya Google üzerinde henüz veri bulunamadı...</b>"
     
-    mesaj = "📋 <b>GOOGLE SPOR WİDGET - GÜNÜN MAÇLARI VE TAHMİNLERİ</b> 📋\n\n"
+    mesaj = f"📋 <b>GÜNÜN MAÇLARI VE TAHMİNLERİ ({len(hafiza_maclar)} Maç)</b> 📋\n\n"
     for i, mac in enumerate(hafiza_maclar, 1):
         mesaj += (
             f"{i}. ⚽ <b>{mac['ev_sahibi']} vs {mac['deplasman']}</b>\n"
@@ -59,11 +45,11 @@ def format_hafiza_mesaji():
     return mesaj
 
 # ================= ==========================================
-# 2. RENDER HEALTH CHECK VE TELEGRAM WEBHOOK
+# 2. FLASK SERVER VE TELEGRAM WEBHOOK
 # ================= ==========================================
 @app.route('/')
 def home():
-    return "Google Spor Widget Botu (Debug Modu V2) Aktif!"
+    return "Google Spor Widget Botu (bot2.py) Aktif ve Çalışıyor!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -88,95 +74,75 @@ flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # ================= ==========================================
-# 3. GOOGLE WIDGET DEBUG VE VERİ ÇEKME FONKSİYONU
+# 3. KESİNTİSİZ VERİ ÇEKME FONKSİYONU (Requests + BS4)
 # ================= ==========================================
 def daily_match_fetch():
     global hafiza_maclar
-    print("Google Arama Spor Widget'ına bağlanılıyor (DEBUG V2)...", flush=True)
-    
-    # İşlem başladığını Telegram'a bildir
-    send_telegram_message(TELEGRAM_CHAT_ID, "🔄 <b>Google Tarama Başlatıldı...</b>\nSayfa yükleniyor, lütfen bekleyin.")
+    print("Google Spor Arama Widget'ına veri isteği atılıyor...", flush=True)
     
     yeni_hafiza = []
-    debug_log = []
+    
+    # Google'ı gerçek bir masaüstü tarayıcısı gibi taklit eden başlıklar
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+    
+    google_url = "https://www.google.com/search?q=bug%C3%BCn+oynanacak+futbol+ma%C3%A7lar%C4%B1&hl=tr&gl=tr"
     
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox', 
-                    '--disable-setuid-sandbox', 
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu'
-                ]
-            )
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                locale="tr-TR",
-                viewport={'width': 1280, 'height': 800}
-            )
-            page = context.new_page()
+        response = requests.get(google_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            google_url = "https://www.google.com/search?q=bug%C3%BCn+oynanacak+futbol+ma%C3%A7lar%C4%B1&hl=tr&gl=tr"
+            # Google Spor Widget CSS Sınıfları
+            home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
+            away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
+            times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
             
-            # Sayfaya git ve bekle
-            response = page.goto(google_url, timeout=45000, wait_until="domcontentloaded")
-            time.sleep(6)
-            
-            # Debug Bilgileri
-            page_title = page.title()
-            current_url = page.url
-            status_code = response.status if response else "Bilinmiyor"
-            
-            # Ekran Görüntüsü Yakala (Düşük boyutlu JPEG)
-            screenshot_bytes = page.screenshot(type="jpeg", quality=60, full_page=False)
-            html_content = page.content()
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            debug_log.append(f"📌 <b>Sayfa Başlığı:</b> {page_title}")
-            debug_log.append(f"📡 <b>HTTP Durum:</b> {status_code}")
-            debug_log.append(f"📄 <b>HTML Boyutu:</b> {len(html_content)} karakter")
-            
-            # Sayfa İçerik Teşhisi
-            if "recaptcha" in html_content.lower() or "sorry/index" in current_url.lower():
-                debug_log.append("🚨 <b>TEŞHİS:</b> Google IP'yi engelledi (CAPTCHA doğrulama sayfası)!")
-            elif "consent.google.com" in current_url.lower() or "çerez" in page_title.lower():
-                debug_log.append("⚠️ <b>TEŞHİS:</b> Google Çerez (Cookie) onay duvarına takıldı.")
-            else:
-                # Muhtemel element sorguları
-                div_count = len(soup.find_all('div'))
-                debug_log.append(f"🔹 Sayfadaki Toplam Div Sayısı: {div_count}")
-                
-                home_teams = [t.text.strip() for t in soup.select('div[data-df-team-name], div.imso_mh__first-tn-blk, div.imso-g-first-team-name')]
-                away_teams = [t.text.strip() for t in soup.select('div.imso_mh__second-tn-blk, div.imso-g-second-team-name')]
-                times = [s.text.strip() for s in soup.select('div.imso_mh__status-or-time, span.imso_mh__ft-mt-m, div.imso-g-time')]
-                
-                debug_log.append(f"⚽ <b>Tespit Edilen Takım Sayısı:</b> {len(home_teams)}")
-                
-                min_len = min(len(home_teams), len(away_teams))
-                for i in range(min_len):
-                    yeni_hafiza.append({
-                        "ev_sahibi": home_teams[i],
-                        "deplasman": away_teams[i],
-                        "saat": times[i] if i < len(times) else "Bugün",
-                        "tahmin": "2.5 Üst / KG Var"
-                    })
-            
-            browser.close()
-            
-            # Rapor ve Görsel Gönderimi
-            debug_text = "🛠 <b>GOOGLE WIDGET DEBUG RAPORU (V2)</b> 🛠\n\n" + "\n".join(debug_log)
-            send_telegram_photo(TELEGRAM_CHAT_ID, screenshot_bytes, debug_text)
+            min_len = min(len(home_teams), len(away_teams))
+            for i in range(min_len):
+                yeni_hafiza.append({
+                    "ev_sahibi": home_teams[i],
+                    "deplasman": away_teams[i],
+                    "saat": times[i] if i < len(times) else "Bugün",
+                    "tahmin": "2.5 Üst / KG Var"
+                })
+        else:
+            print(f"Google yanıt vermedi, HTTP Kodu: {response.status_code}", flush=True)
 
     except Exception as e:
-        error_trace = traceback.format_exc()
-        err_msg = f"❌ <b>Playwright Hata Aldı:</b>\n<code>{str(e)}</code>\n\n<b>Detay:</b>\n<code>{error_trace[:500]}</code>"
-        print(err_msg, flush=True)
-        send_telegram_message(TELEGRAM_CHAT_ID, err_msg)
-        
+        print(f"Veri çekme hatası: {e}", flush=True)
+
+    # Eğer Google HTML yanıtında sınıflar değişmişse ve 0 maç döndüyse yedek API'yi devreye al
+    if not yeni_hafiza:
+        print("Google alternatif yönteme geçiliyor...", flush=True)
+        try:
+            today_str = time.strftime("%Y-%m-%d")
+            backup_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={today_str.replace('-', '')}"
+            res = requests.get(backup_url, timeout=10)
+            if res.status_code == 200:
+                events = res.json().get("events", [])
+                for event in events:
+                    competitors = event.get("competitions", [{}])[0].get("competitors", [])
+                    if len(competitors) >= 2:
+                        ev = competitors[0].get("team", {}).get("displayName", "")
+                        dep = competitors[1].get("team", {}).get("displayName", "")
+                        saat = event.get("status", {}).get("type", {}).get("shortDetail", "Bugün")
+                        
+                        yeni_hafiza.append({
+                            "ev_sahibi": ev,
+                            "deplasman": dep,
+                            "saat": saat,
+                            "tahmin": "KG Var / 2.5 Üst"
+                        })
+        except Exception as e:
+            print(f"Yedek servis hatası: {e}", flush=True)
+
     hafiza_maclar = yeni_hafiza
-    print(f"Debug işlemi bitti. Hafızaya {len(hafiza_maclar)} maç kaydedildi.", flush=True)
+    print(f"İşlem tamamlandı. Hafızaya {len(hafiza_maclar)} maç kaydedildi.", flush=True)
 
 # ================= ==========================================
 # 4. ARKA PLAN DÖNGÜSÜ
@@ -184,8 +150,13 @@ def daily_match_fetch():
 def background_worker():
     daily_match_fetch()
     
+    # Başlangıç bildirimi gönder
+    status_msg = f"🤖 <b>Bot2 Aktif Edildi!</b>\nGünün bülteninden <b>{len(hafiza_maclar)} maç</b> hafızaya alındı.\nGruba <code>!b</code> yazarak bülteni çağırabilirsiniz."
+    send_telegram_message(TELEGRAM_CHAT_ID, status_msg)
+    
     son_gunluk_cekme = time.time()
     while True:
+        # 12 saatte bir hafızayı güncelle
         if time.time() - son_gunluk_cekme >= 43200:
             daily_match_fetch()
             son_gunluk_cekme = time.time()
